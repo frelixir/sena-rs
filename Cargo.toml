@@ -1,0 +1,33 @@
+[workspace]
+members = [
+    "crates/pal-script",
+    "crates/pal-asset",
+    "crates/pal-assets",
+    "crates/pal-disassembled",
+    "crates/pal-vm",
+    "crates/na_wmv_player",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MPL-2.0"
+rust-version = "1.87"
+
+[workspace.dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+encoding_rs = "0.8"
+pal-script = { path = "crates/pal-script" }
+pal-asset = { path = "crates/pal-asset" }
+pal-vm = { path = "crates/pal-vm" }
+wgpu = "29"
+winit = "0.30"
+pollster = "0.4"
+bytemuck = { version = "1.23", features = ["derive"] }
+log = "0.4"
+env_logger = "0.11"
+kira = "0.12.1"
+ab_glyph = "0.2"
+softbuffer = "0.4.8"
+wmv-decoder = { path = "crates/na_wmv_player", default-features = false, features = ["video-only"] }

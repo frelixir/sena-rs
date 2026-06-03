@@ -1,0 +1,524 @@
+use std::collections::HashMap;
+use std::io::Write;
+use std::num::NonZeroU32;
+use std::sync::Arc;
+
+use winit::dpi::PhysicalSize;
+use winit::event_loop::OwnedDisplayHandle;
+use winit::window::Window;
+
+use crate::scene::{
+    DrawCommand, FrameScene, RectF, SceneTexture, SceneTextureFormat, SceneTextureId, SolidQuad,
+    SpriteDraw,
+};
+
+mod shader;
+
+pub use shader::{shader_source, ShaderProgram};
+
+#[derive(Clone, Copy, Debug)]
+pub struct RendererConfig {
+    pub clear_color: wgpu::Color,
+    pub virtual_width: u32,
+    pub virtual_height: u32,
+}
+
+impl Default for RendererConfig {
+    fn default() -> Self {
+        Self {
+            clear_color: wgpu::Color {
+                r: 0.02,
+                g: 0.02,
+                b: 0.025,
+                a: 1.0,
+            },
+            virtual_width: FrameScene::PAL_DEFAULT_WIDTH,
+            virtual_height: FrameScene::PAL_DEFAULT_HEIGHT,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RenderOutcome {
+    Rendered,
+    Skipped,
+    Reconfigured,
+}
+
+pub struct Renderer {
+    window: Arc<Window>,
+    surface: softbuffer::Surface<Arc<Window>, Arc<Window>>,
+    size: PhysicalSize<u32>,
+    virtual_size: PhysicalSize<u32>,
+    clear_color: wgpu::Color,
+    scene_textures: HashMap<SceneTextureId, CachedTexture>,
+    frame_dump_path: Option<String>,
+    frame_dump_written: bool,
+}
+
+impl Renderer {
+    pub async fn new(
+        window: Arc<Window>,
+        _display_handle: OwnedDisplayHandle,
+        renderer_config: RendererConfig,
+    ) -> anyhow::Result<Self> {
+        let size = nonzero_size(window.inner_size());
+        let context =
+            softbuffer::Context::new(window.clone()).map_err(|err| softbuffer_error(err))?;
+        let mut surface = softbuffer::Surface::new(&context, window.clone())
+            .map_err(|err| softbuffer_error(err))?;
+        surface
+            .resize(nonzero(size.width), nonzero(size.height))
+            .map_err(|err| softbuffer_error(err))?;
+        Ok(Self {
+            window,
+            surface,
+            size,
+            virtual_size: PhysicalSize::new(
+                renderer_config.virtual_width.max(1),
+                renderer_config.virtual_height.max(1),
+            ),
+            clear_color: renderer_config.clear_color,
+            scene_textures: HashMap::new(),
+            frame_dump_path: std::env::var("PAL_RENDER_DUMP").ok(),
+            frame_dump_written: false,
+        })
+    }
+
+    pub fn window(&self) -> &Window {
+        &self.window
+    }
+
+    pub fn size(&self) -> PhysicalSize<u32> {
+        self.size
+    }
+
+    pub fn resize(&mut self, size: PhysicalSize<u32>) {
+        let size = nonzero_size(size);
+        if size == self.size {
+            return;
+        }
+        self.size = size;
+        if let Err(err) = self
+            .surface
+            .resize(nonzero(size.width), nonzero(size.height))
+        {
+            log::error!("failed to resize software renderer surface: {err}");
+        }
+    }
+
+    pub fn render(&mut self, scene: &FrameScene) -> RenderOutcome {
+        self.upload_scene_textures(scene);
+        if self.size.width == 0 || self.size.height == 0 {
+            return RenderOutcome::Skipped;
+        }
+        match self.draw_surface_frame(scene) {
+            Ok(()) => RenderOutcome::Rendered,
+            Err(err) => {
+                log::error!("software renderer failed: {err}");
+                RenderOutcome::Skipped
+            }
+        }
+    }
+
+    fn upload_scene_textures(&mut self, scene: &FrameScene) {
+        for texture in &scene.textures {
+            let needs_upload = self.scene_textures.get(&texture.id).is_none_or(|cached| {
+                cached.generation != texture.generation
+                    || cached.width != texture.width
+                    || cached.height != texture.height
+            });
+            if needs_upload {
+                match CachedTexture::from_scene(texture) {
+                    Ok(cached) => {
+                        self.scene_textures.insert(texture.id, cached);
+                    }
+                    Err(err) => {
+                        log::error!("failed to cache scene texture {:?}: {err}", texture.id);
+                    }
+                }
+            }
+        }
+    }
+
+    fn draw_surface_frame(&mut self, scene: &FrameScene) -> anyhow::Result<()> {
+        let width = self.size.width as usize;
+        let height = self.size.height as usize;
+        let clear = color_to_rgb(scene_clear_color(scene, self.clear_color));
+        let logical_size = [
+            scene.logical_width.max(1).min(u32::MAX),
+            scene.logical_height.max(1).min(u32::MAX),
+        ];
+        self.virtual_size = PhysicalSize::new(logical_size[0], logical_size[1]);
+        let metrics = RenderTargetMetrics::new(
+            [width as u32, height as u32],
+            [self.virtual_size.width, self.virtual_size.height],
+        );
+        let scene_textures = &self.scene_textures;
+        let mut buffer = self
+            .surface
+            .buffer_mut()
+            .map_err(|err| softbuffer_error(err))?;
+        if buffer.len() != width.saturating_mul(height) {
+            anyhow::bail!(
+                "software surface has {} pixels, expected {}",
+                buffer.len(),
+                width.saturating_mul(height)
+            );
+        }
+        buffer.fill(clear);
+        for command in &scene.commands {
+            match command {
+                DrawCommand::Sprite(sprite) => draw_sprite(
+                    scene_textures,
+                    &mut buffer,
+                    width,
+                    height,
+                    metrics.scale,
+                    sprite,
+                ),
+                DrawCommand::SolidQuad(quad) => {
+                    draw_solid_quad(&mut buffer, width, height, metrics.scale, *quad)
+                }
+            }
+        }
+        if pal_debug_enabled() {
+            eprintln!(
+                "[PAL_DEBUG] render_target: window={}x{} logical={}x{} surface={}x{} scale=({:.6},{:.6}) viewport=({}, {}, {}x{})",
+                metrics.window_physical_size[0],
+                metrics.window_physical_size[1],
+                metrics.logical_size[0],
+                metrics.logical_size[1],
+                metrics.surface_size[0],
+                metrics.surface_size[1],
+                metrics.scale[0],
+                metrics.scale[1],
+                metrics.viewport.x,
+                metrics.viewport.y,
+                metrics.viewport.w,
+                metrics.viewport.h,
+            );
+            for (index, command) in scene.commands.iter().enumerate() {
+                if let DrawCommand::Sprite(sprite) = command {
+                    let transform = sprite_transform_debug(sprite, &metrics);
+                    eprintln!(
+                        "[PAL_DEBUG] render_sprite[{index}]: dst_pal=({:.3},{:.3},{:.3}x{:.3}) dst_device=({:.3},{:.3},{:.3}x{:.3}) uv=({:.6},{:.6},{:.6}x{:.6}) quad=({:.6},{:.6}) ({:.6},{:.6}) ({:.6},{:.6}) ({:.6},{:.6}) prio={}",
+                        sprite.dst.x,
+                        sprite.dst.y,
+                        sprite.dst.w,
+                        sprite.dst.h,
+                        transform.dst_device.x,
+                        transform.dst_device.y,
+                        transform.dst_device.w,
+                        transform.dst_device.h,
+                        transform.uv.x,
+                        transform.uv.y,
+                        transform.uv.w,
+                        transform.uv.h,
+                        transform.clip_quad[0][0],
+                        transform.clip_quad[0][1],
+                        transform.clip_quad[1][0],
+                        transform.clip_quad[1][1],
+                        transform.clip_quad[2][0],
+                        transform.clip_quad[2][1],
+                        transform.clip_quad[3][0],
+                        transform.clip_quad[3][1],
+                        sprite.priority,
+                    );
+                }
+            }
+        }
+        if !self.frame_dump_written {
+            if let Some(path) = self.frame_dump_path.as_deref() {
+                write_ppm(path, &buffer, width, height)?;
+                self.frame_dump_written = true;
+                log::info!("wrote software renderer frame dump to {path}");
+            }
+        }
+        buffer.present().map_err(|err| softbuffer_error(err))?;
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RenderTargetMetrics {
+    pub window_physical_size: [u32; 2],
+    pub logical_size: [u32; 2],
+    pub surface_size: [u32; 2],
+    pub scale: [f32; 2],
+    pub viewport: RectF,
+}
+
+impl RenderTargetMetrics {
+    pub fn new(surface_size: [u32; 2], logical_size: [u32; 2]) -> Self {
+        let surface_w = surface_size[0].max(1);
+        let surface_h = surface_size[1].max(1);
+        let logical_w = logical_size[0].max(1);
+        let logical_h = logical_size[1].max(1);
+        let scale = [
+            surface_w as f32 / logical_w as f32,
+            surface_h as f32 / logical_h as f32,
+        ];
+        Self {
+            window_physical_size: [surface_w, surface_h],
+            logical_size: [logical_w, logical_h],
+            surface_size: [surface_w, surface_h],
+            scale,
+            viewport: RectF::new(0.0, 0.0, surface_w as f32, surface_h as f32),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpriteTransformDebug {
+    pub dst_device: RectF,
+    pub uv: RectF,
+    pub clip_quad: [[f32; 2]; 4],
+}
+
+pub fn sprite_transform_debug(
+    sprite: &SpriteDraw,
+    metrics: &RenderTargetMetrics,
+) -> SpriteTransformDebug {
+    let dst_device = scaled_rect(sprite.dst, metrics.scale);
+    let uv = sprite.src;
+    SpriteTransformDebug {
+        dst_device,
+        uv,
+        clip_quad: pal_device_rect_to_clip_quad(dst_device, metrics.surface_size),
+    }
+}
+
+pub fn scaled_rect(rect: RectF, scale: [f32; 2]) -> RectF {
+    RectF::new(
+        rect.x * scale[0],
+        rect.y * scale[1],
+        rect.w * scale[0],
+        rect.h * scale[1],
+    )
+}
+
+pub fn pal_device_rect_to_clip_quad(rect: RectF, surface_size: [u32; 2]) -> [[f32; 2]; 4] {
+    let w = surface_size[0].max(1) as f32;
+    let h = surface_size[1].max(1) as f32;
+    let x0 = (rect.x / w) * 2.0 - 1.0;
+    let x1 = ((rect.x + rect.w) / w) * 2.0 - 1.0;
+    let y0 = 1.0 - (rect.y / h) * 2.0;
+    let y1 = 1.0 - ((rect.y + rect.h) / h) * 2.0;
+    [[x0, y0], [x1, y0], [x1, y1], [x0, y1]]
+}
+
+#[derive(Clone, Debug)]
+struct CachedTexture {
+    generation: u64,
+    width: u32,
+    height: u32,
+    pixels: Vec<u8>,
+}
+
+impl CachedTexture {
+    fn from_scene(texture: &SceneTexture) -> anyhow::Result<Self> {
+        if texture.width == 0 || texture.height == 0 {
+            anyhow::bail!("texture {:?} has an empty size", texture.id);
+        }
+        let expected = texture.width as usize * texture.height as usize * 4;
+        if texture.pixels.len() != expected {
+            anyhow::bail!(
+                "texture {:?} has {} bytes, expected {}",
+                texture.id,
+                texture.pixels.len(),
+                expected
+            );
+        }
+        match texture.format {
+            SceneTextureFormat::Rgba8 => {}
+        }
+        Ok(Self {
+            generation: texture.generation,
+            width: texture.width,
+            height: texture.height,
+            pixels: texture.pixels.clone(),
+        })
+    }
+}
+
+fn scene_clear_color(scene: &FrameScene, fallback: wgpu::Color) -> wgpu::Color {
+    let [r, g, b, a] = scene.clear_color;
+    if [r, g, b, a].iter().all(|v| v.is_finite()) {
+        wgpu::Color { r, g, b, a }
+    } else {
+        fallback
+    }
+}
+
+fn pal_debug_enabled() -> bool {
+    std::env::var("PAL_DEBUG")
+        .ok()
+        .as_deref()
+        .is_some_and(|v| v == "1")
+}
+
+fn draw_sprite(
+    textures: &HashMap<SceneTextureId, CachedTexture>,
+    dst: &mut [u32],
+    width: usize,
+    height: usize,
+    coord_scale: [f32; 2],
+    sprite: &SpriteDraw,
+) {
+    if !sprite.dst.is_drawable() || !sprite.src.is_drawable() {
+        return;
+    }
+    let Some(texture) = textures.get(&sprite.texture_id) else {
+        log::warn!(
+            "skipping sprite with missing texture {:?}; no diagnostic fallback drawn",
+            sprite.texture_id
+        );
+        return;
+    };
+    draw_textured_rect(dst, width, height, texture, coord_scale, sprite);
+}
+
+fn draw_textured_rect(
+    dst: &mut [u32],
+    width: usize,
+    height: usize,
+    texture: &CachedTexture,
+    coord_scale: [f32; 2],
+    sprite: &SpriteDraw,
+) {
+    let scale = if sprite.scale.is_finite() {
+        sprite.scale.abs().max(f32::EPSILON)
+    } else {
+        1.0
+    };
+    let dst_rect = RectF::new(
+        sprite.dst.x * coord_scale[0],
+        sprite.dst.y * coord_scale[1],
+        sprite.dst.w * scale * coord_scale[0],
+        sprite.dst.h * scale * coord_scale[1],
+    );
+    let x0 = dst_rect.x.floor().max(0.0) as i32;
+    let y0 = dst_rect.y.floor().max(0.0) as i32;
+    let x1 = (dst_rect.x + dst_rect.w).ceil().min(width as f32) as i32;
+    let y1 = (dst_rect.y + dst_rect.h).ceil().min(height as f32) as i32;
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+
+    let src_x = sprite.src.x * texture.width as f32;
+    let src_y = sprite.src.y * texture.height as f32;
+    let src_w = sprite.src.w * texture.width as f32;
+    let src_h = sprite.src.h * texture.height as f32;
+    let tint = sprite.color;
+    for y in y0..y1 {
+        let v = ((y as f32 - dst_rect.y) / dst_rect.h).clamp(0.0, 1.0);
+        let sy = (src_y + v * src_h)
+            .floor()
+            .clamp(0.0, texture.height.saturating_sub(1) as f32) as usize;
+        for x in x0..x1 {
+            let u = ((x as f32 - dst_rect.x) / dst_rect.w).clamp(0.0, 1.0);
+            let sx = (src_x + u * src_w)
+                .floor()
+                .clamp(0.0, texture.width.saturating_sub(1) as f32) as usize;
+            let src_index = (sy * texture.width as usize + sx) * 4;
+            let r = (texture.pixels[src_index] as f32 * tint[0].clamp(0.0, 1.0)) as u8;
+            let g = (texture.pixels[src_index + 1] as f32 * tint[1].clamp(0.0, 1.0)) as u8;
+            let b = (texture.pixels[src_index + 2] as f32 * tint[2].clamp(0.0, 1.0)) as u8;
+            let a = (texture.pixels[src_index + 3] as f32 * tint[3].clamp(0.0, 1.0)) as u8;
+            if a == 0 {
+                continue;
+            }
+            let dst_index = y as usize * width + x as usize;
+            dst[dst_index] = blend_over(dst[dst_index], r, g, b, a);
+        }
+    }
+}
+
+fn draw_solid_quad(
+    dst: &mut [u32],
+    width: usize,
+    height: usize,
+    coord_scale: [f32; 2],
+    quad: SolidQuad,
+) {
+    if !quad.dst.is_drawable() {
+        return;
+    }
+    let x0 = (quad.dst.x * coord_scale[0]).floor().max(0.0) as i32;
+    let y0 = (quad.dst.y * coord_scale[1]).floor().max(0.0) as i32;
+    let x1 = ((quad.dst.x + quad.dst.w) * coord_scale[0])
+        .ceil()
+        .min(width as f32) as i32;
+    let y1 = ((quad.dst.y + quad.dst.h) * coord_scale[1])
+        .ceil()
+        .min(height as f32) as i32;
+    if x0 >= x1 || y0 >= y1 {
+        return;
+    }
+    let r = float_channel(quad.color[0]);
+    let g = float_channel(quad.color[1]);
+    let b = float_channel(quad.color[2]);
+    let a = float_channel(quad.color[3]);
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let index = y as usize * width + x as usize;
+            dst[index] = blend_over(dst[index], r, g, b, a);
+        }
+    }
+}
+
+fn blend_over(dst: u32, src_r: u8, src_g: u8, src_b: u8, src_a: u8) -> u32 {
+    if src_a == 255 {
+        return pack_rgb(src_r, src_g, src_b);
+    }
+    let inv_a = 255u32.saturating_sub(u32::from(src_a));
+    let dst_r = (dst >> 16) & 0xFF;
+    let dst_g = (dst >> 8) & 0xFF;
+    let dst_b = dst & 0xFF;
+    let r = (u32::from(src_r) * u32::from(src_a) + dst_r * inv_a + 127) / 255;
+    let g = (u32::from(src_g) * u32::from(src_a) + dst_g * inv_a + 127) / 255;
+    let b = (u32::from(src_b) * u32::from(src_a) + dst_b * inv_a + 127) / 255;
+    pack_rgb(r as u8, g as u8, b as u8)
+}
+
+fn color_to_rgb(color: wgpu::Color) -> u32 {
+    pack_rgb(
+        float_channel(color.r as f32),
+        float_channel(color.g as f32),
+        float_channel(color.b as f32),
+    )
+}
+
+fn float_channel(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0).round() as u8
+}
+
+fn pack_rgb(r: u8, g: u8, b: u8) -> u32 {
+    (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)
+}
+
+fn nonzero_size(size: PhysicalSize<u32>) -> PhysicalSize<u32> {
+    PhysicalSize::new(size.width.max(1), size.height.max(1))
+}
+
+fn nonzero(value: u32) -> NonZeroU32 {
+    NonZeroU32::new(value.max(1)).expect("value was clamped to non-zero")
+}
+
+fn softbuffer_error(err: softbuffer::SoftBufferError) -> anyhow::Error {
+    anyhow::anyhow!("{err:?}")
+}
+
+fn write_ppm(path: &str, pixels: &[u32], width: usize, height: usize) -> anyhow::Result<()> {
+    let mut file = std::fs::File::create(path)?;
+    writeln!(file, "P6\n{} {}\n255", width, height)?;
+    for pixel in pixels {
+        file.write_all(&[
+            ((pixel >> 16) & 0xFF) as u8,
+            ((pixel >> 8) & 0xFF) as u8,
+            (pixel & 0xFF) as u8,
+        ])?;
+    }
+    Ok(())
+}
