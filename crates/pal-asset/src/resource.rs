@@ -105,7 +105,11 @@ impl ResourceManager {
 
     pub fn open_decrypting(&mut self, name: &str) -> Result<LoadedAsset> {
         let mut asset = self.open(name)?;
-        decrypt_pal_dollar_file(name, &mut asset.bytes)?;
+        // Loose files are already decrypted by the PAC unpacker; only PAC-sourced
+        // data carries the raw (encrypted) payload and needs the dollar-file transform.
+        if matches!(asset.source, AssetSource::Pac { .. }) {
+            decrypt_pal_dollar_file(name, &mut asset.bytes)?;
+        }
         Ok(asset)
     }
 

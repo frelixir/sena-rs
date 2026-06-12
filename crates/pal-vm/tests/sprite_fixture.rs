@@ -56,6 +56,39 @@ fn rgba_sprite_create_and_replace_updates_draw_surface() {
 }
 
 #[test]
+fn release_removes_render_node_and_unreferenced_surface() {
+    let mut sprites = make_system();
+    let first = sprites.create(SpriteDesc {
+        texture_id: SceneTextureId(10),
+        texture_width: 64,
+        texture_height: 32,
+        visible: true,
+        ..SpriteDesc::new(SceneTextureId(10), 64, 32)
+    });
+    let second = sprites.create(SpriteDesc {
+        texture_id: SceneTextureId(10),
+        texture_width: 64,
+        texture_height: 32,
+        visible: true,
+        ..SpriteDesc::new(SceneTextureId(10), 64, 32)
+    });
+
+    assert_eq!(sprites.len(), 2);
+    assert_eq!(sprites.render_node_count(), 2);
+    assert!(sprites.surface(SpriteSurfaceId(10)).is_some());
+
+    assert!(sprites.release(first));
+    assert_eq!(sprites.len(), 1);
+    assert_eq!(sprites.render_node_count(), 1);
+    assert!(sprites.surface(SpriteSurfaceId(10)).is_some());
+
+    assert!(sprites.release(second));
+    assert_eq!(sprites.len(), 0);
+    assert_eq!(sprites.render_node_count(), 0);
+    assert!(sprites.surface(SpriteSurfaceId(10)).is_none());
+}
+
+#[test]
 fn sprite_rect_reset_uses_texture_size_but_rect_set_pos_uses_cell_size() {
     let mut sprites = make_system();
     let sprite = sprites.create(SpriteDesc {
@@ -155,6 +188,44 @@ fn render_nodes_sort_by_effective_priority() {
 }
 
 #[test]
+fn equal_priority_draws_newer_render_nodes_over_older_nodes() {
+    let mut sprites = make_system();
+    let foreground = sprites.create(SpriteDesc {
+        texture_id: SceneTextureId(10),
+        texture_width: 64,
+        texture_height: 32,
+        visible: true,
+        base_priority: 0,
+        ..SpriteDesc::new(SceneTextureId(10), 64, 32)
+    });
+    let fullscreen_background = sprites.create(SpriteDesc {
+        texture_id: SceneTextureId(11),
+        texture_width: 1280,
+        texture_height: 720,
+        visible: true,
+        base_priority: 0,
+        ..SpriteDesc::new(SceneTextureId(11), 1280, 720)
+    });
+
+    let commands = sprites.commands();
+    let pal_vm::DrawCommand::Sprite(first) = &commands[0] else {
+        panic!("expected sprite draw")
+    };
+    let pal_vm::DrawCommand::Sprite(second) = &commands[1] else {
+        panic!("expected sprite draw")
+    };
+    assert_eq!(first.texture_id, SceneTextureId(10));
+    assert_eq!(second.texture_id, SceneTextureId(11));
+    assert_eq!(
+        sprites
+            .get(fullscreen_background)
+            .unwrap()
+            .effective_priority(),
+        sprites.get(foreground).unwrap().effective_priority()
+    );
+}
+
+#[test]
 fn transition_or_lock_suppresses_normal_sprite_draw() {
     let mut sprites = make_system();
     let sprite = sprites.create(SpriteDesc {
@@ -176,6 +247,46 @@ fn transition_or_lock_suppresses_normal_sprite_draw() {
     assert!(sprites.commands().is_empty());
     assert!(sprites.unlock(sprite));
     assert_eq!(sprites.commands().len(), 1);
+}
+
+#[test]
+fn fully_transparent_argb_sprite_does_not_emit_draw_command() {
+    let mut sprites = make_system();
+    let sprite = sprites.create(SpriteDesc {
+        texture_id: SceneTextureId(10),
+        texture_width: 64,
+        texture_height: 32,
+        visible: true,
+        color: PalColor::from_argb(0x00FF_FFFF),
+        ..SpriteDesc::new(SceneTextureId(10), 64, 32)
+    });
+
+    assert!(sprites.commands().is_empty());
+    sprites.get_mut(sprite).expect("sprite should exist").color = PalColor::from_argb(0x01FF_FFFF);
+    assert_eq!(sprites.commands().len(), 1);
+}
+
+#[test]
+fn sprite_scale_changes_draw_rect_around_center_offset() {
+    let mut sprites = make_system();
+    let sprite = sprites.create(SpriteDesc {
+        texture_id: SceneTextureId(10),
+        texture_width: 64,
+        texture_height: 32,
+        visible: true,
+        position: PalVec3::new(10, 20, 0),
+        ..SpriteDesc::new(SceneTextureId(10), 64, 32)
+    });
+    assert!(sprites.set_center_offset(sprite, 32, 16));
+    assert!(sprites.set_scale(sprite, 2.0));
+
+    let DrawCommand::Sprite(draw) = &sprites.commands()[0] else {
+        panic!("scaled sprite should draw");
+    };
+    assert_eq!(draw.dst.x, 42.0);
+    assert_eq!(draw.dst.y, 36.0);
+    assert_eq!(draw.dst.w, 128.0);
+    assert_eq!(draw.dst.h, 64.0);
 }
 
 #[test]
@@ -322,6 +433,31 @@ fn sprite_transition_handle_marks_and_cancels_participating_sprites() {
 }
 
 #[test]
+fn screen_copy_sprite_is_hidden_after_transition_finishes() {
+    let mut sprites = SpriteSystem::new();
+    let backbuffer = sprites
+        .create_rgba_sprite(
+            4,
+            4,
+            vec![0; 4 * 4 * 4],
+            PalVec3::default(),
+            0,
+            "screen-copy:backbuffer",
+        )
+        .expect("backbuffer sprite");
+    assert!(sprites.view_ctrl(backbuffer, true));
+    let transition = sprites.create_transition_handle();
+
+    assert!(sprites.set_transition(transition, 1, None, Some(backbuffer), 1, 16, 0));
+    assert_eq!(sprites.transition_commands().len(), 1);
+    sprites.advance_transitions(16);
+
+    assert_eq!(sprites.transition_state(transition), 3);
+    assert!(!sprites.get(backbuffer).unwrap().visible);
+    assert!(sprites.commands().is_empty());
+}
+
+#[test]
 fn sprite_fx_effect_state_tracks_set_update_and_release() {
     let mut sprites = make_system();
     let sprite = sprites.create(SpriteDesc::new(SceneTextureId(10), 64, 32));
@@ -333,4 +469,35 @@ fn sprite_fx_effect_state_tracks_set_update_and_release() {
     assert!(sprites.set_sprite_fx_effect(sprite, 4, 2, 200));
     assert!(sprites.release_sprite_fx_effect(sprite));
     assert_eq!(sprites.sprite_fx_effect_state(sprite), 0);
+}
+
+#[test]
+fn named_ani_motion_lanes_share_one_motion_entry_and_clear_on_completion() {
+    let mut sprites = make_system();
+    let sprite = sprites.create(SpriteDesc {
+        texture_id: SceneTextureId(10),
+        texture_width: 64,
+        texture_height: 32,
+        visible: true,
+        ..SpriteDesc::new(SceneTextureId(10), 64, 32)
+    });
+
+    assert!(sprites.tween_pos_by(sprite, 30.0, 12.0, 3.0, 100));
+    assert!(sprites.tween_scale_to(sprite, 2.0, 100));
+    assert!(sprites.tween_alpha_to(sprite, 64, 100));
+    assert_eq!(sprites.motion_entry_count(), 1);
+
+    sprites.advance_motion_entries(50);
+    let mid = sprites.get(sprite).unwrap();
+    assert_eq!(mid.position, PalVec3::from_f32(15.0, 6.0, 1.5));
+    assert_eq!(mid.scale, 1.5);
+    assert_eq!(mid.color.alpha(), 160);
+    assert_eq!(sprites.motion_entry_count(), 1);
+
+    sprites.advance_motion_entries(50);
+    let done = sprites.get(sprite).unwrap();
+    assert_eq!(done.position, PalVec3::from_f32(30.0, 12.0, 3.0));
+    assert_eq!(done.scale, 2.0);
+    assert_eq!(done.color.alpha(), 64);
+    assert_eq!(sprites.motion_entry_count(), 0);
 }

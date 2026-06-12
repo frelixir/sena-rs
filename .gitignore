@@ -26,4 +26,7 @@ rustc-ice-*.txt
 docs/
 testcase/
 reverse/
+out/
+tools/
 
+**/.*

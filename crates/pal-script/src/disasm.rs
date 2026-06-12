@@ -1,10 +1,11 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::error::{PalError, Result};
 use crate::opcodes::{ext_opcode, primary_opcode, PrimaryOpcode};
 use crate::operand::Operand;
 use crate::point::PointTable;
-use crate::script::ScriptImage;
+use crate::script::{ScriptImage, SCRIPT_CODE_BASE};
 
 #[derive(Debug, Clone, Copy)]
 pub struct DisassembleOptions<'a> {
@@ -30,6 +31,11 @@ pub enum Argument {
         id: u32,
         target_pc: Option<u32>,
     },
+    PointOperand {
+        operand: Operand,
+        point_id: Option<u32>,
+        target_pc: Option<u32>,
+    },
     RawSlot {
         slot: u16,
         raw: u32,
@@ -50,15 +56,52 @@ pub enum Argument {
 pub enum Instruction {
     DataWord {
         pc: u32,
+        end_pc: u32,
         word: u32,
     },
     Primary {
         pc: u32,
+        end_pc: u32,
         word: u32,
         opcode: u16,
         meta: Option<PrimaryOpcode>,
         args: Vec<Argument>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FlowEdgeKind {
+    Fallthrough,
+    Jump,
+    BranchFalse,
+    BranchTrue,
+    Call,
+    Return,
+    Halt,
+    Wait,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FlowEdge {
+    pub kind: FlowEdgeKind,
+    pub target_pc: Option<u32>,
+    pub point_id: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AnnotateOptions {
+    pub show_flow: bool,
+    pub show_labels: bool,
+}
+
+impl Default for AnnotateOptions {
+    fn default() -> Self {
+        Self {
+            show_flow: true,
+            show_labels: true,
+        }
+    }
 }
 
 pub fn disassemble_script(
@@ -88,6 +131,7 @@ pub fn disassemble_script(
         if hi != 1 {
             instructions.push(Instruction::DataWord {
                 pc: insn_pc as u32,
+                end_pc: pc as u32,
                 word,
             });
             continue;
@@ -131,7 +175,21 @@ pub fn disassemble_script(
                     raw: dst,
                 });
             }
-            9 | 11 => {
+            9 => {
+                let raw = read_instruction_u32(script, &mut pc, end)?;
+                let operand = Operand::decode(raw);
+                let point_id = immediate_point_id(operand);
+                let target_pc = match point_id {
+                    Some(id) => resolve_point(options.point_table, id)?,
+                    None => None,
+                };
+                args.push(Argument::PointOperand {
+                    operand,
+                    point_id,
+                    target_pc,
+                });
+            }
+            11 => {
                 let raw = read_instruction_u32(script, &mut pc, end)?;
                 let id = raw;
                 let target_pc = resolve_point(options.point_table, id)?;
@@ -148,6 +206,7 @@ pub fn disassemble_script(
 
         instructions.push(Instruction::Primary {
             pc: insn_pc as u32,
+            end_pc: pc as u32,
             word,
             opcode,
             meta,
@@ -179,6 +238,248 @@ fn resolve_point(point_table: Option<&PointTable>, id: u32) -> Result<Option<u32
     }
 }
 
+fn immediate_point_id(operand: Operand) -> Option<u32> {
+    match operand.kind {
+        crate::operand::OperandKind::Immediate | crate::operand::OperandKind::LiteralSlot => {
+            Some(operand.raw)
+        }
+        _ => None,
+    }
+}
+
+pub fn format_annotated_script(
+    script: &ScriptImage<'_>,
+    options: DisassembleOptions<'_>,
+    annotate: AnnotateOptions,
+) -> Result<String> {
+    let instructions = disassemble_script(script, options)?;
+    let labels = collect_labels(options.point_table, &instructions);
+    let mut out = String::new();
+
+    for instruction in &instructions {
+        if annotate.show_labels {
+            if let Some(names) = labels.get(&instruction.pc()) {
+                for name in names {
+                    out.push_str(name);
+                    out.push_str(":\n");
+                }
+            }
+        }
+        out.push_str("  ");
+        out.push_str(&instruction.to_string());
+        if annotate.show_flow {
+            let flow = format_flow_edges(&instruction.flow_edges(), &labels);
+            if !flow.is_empty() {
+                out.push_str(" ; flow=");
+                out.push_str(&flow);
+            }
+        }
+        out.push('\n');
+    }
+
+    Ok(out)
+}
+
+pub fn format_cfg(script: &ScriptImage<'_>, options: DisassembleOptions<'_>) -> Result<String> {
+    let instructions = disassemble_script(script, options)?;
+    let labels = collect_labels(options.point_table, &instructions);
+    let mut out = String::new();
+    out.push_str("# control-flow edges\n");
+
+    for instruction in &instructions {
+        let source = label_for_pc(instruction.pc(), &labels);
+        let edges = instruction.flow_edges();
+        if edges.is_empty() {
+            out.push_str(&format!("{source} -> <none>\n"));
+            continue;
+        }
+        for edge in edges {
+            let target = edge
+                .target_pc
+                .map(|pc| label_for_pc(pc, &labels))
+                .unwrap_or_else(|| "<dynamic>".to_owned());
+            let point = edge
+                .point_id
+                .map(|id| format!(" point[{id}]"))
+                .unwrap_or_default();
+            out.push_str(&format!("{source} -> {target} [{:?}{point}]\n", edge.kind));
+        }
+    }
+
+    Ok(out)
+}
+
+fn collect_labels(
+    point_table: Option<&PointTable>,
+    instructions: &[Instruction],
+) -> BTreeMap<u32, Vec<String>> {
+    let mut labels: BTreeMap<u32, Vec<String>> = BTreeMap::new();
+
+    if let Some(table) = point_table {
+        let entries = table.len();
+        for (reverse_index, relative) in table.raw_offsets().iter().copied().enumerate() {
+            let point_id = (entries - reverse_index) as u32;
+            if let Some(pc) = SCRIPT_CODE_BASE.checked_add(relative) {
+                labels
+                    .entry(pc)
+                    .or_default()
+                    .push(format!("point_{point_id}"));
+            }
+        }
+    }
+
+    for instruction in instructions {
+        for edge in instruction.flow_edges() {
+            if let Some(pc) = edge.target_pc {
+                labels.entry(pc).or_default().push(format!("loc_{pc:08X}"));
+            }
+        }
+    }
+
+    for names in labels.values_mut() {
+        let mut seen = BTreeSet::new();
+        names.retain(|name| seen.insert(name.clone()));
+    }
+
+    labels
+}
+
+fn format_flow_edges(edges: &[FlowEdge], labels: &BTreeMap<u32, Vec<String>>) -> String {
+    edges
+        .iter()
+        .map(|edge| {
+            let target = edge
+                .target_pc
+                .map(|pc| label_for_pc(pc, labels))
+                .unwrap_or_else(|| "<dynamic>".to_owned());
+            let point = edge
+                .point_id
+                .map(|id| format!(" point[{id}]"))
+                .unwrap_or_default();
+            format!("{:?}->{target}{point}", edge.kind)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn label_for_pc(pc: u32, labels: &BTreeMap<u32, Vec<String>>) -> String {
+    labels
+        .get(&pc)
+        .and_then(|names| names.first())
+        .cloned()
+        .unwrap_or_else(|| format!("0x{pc:08X}"))
+}
+
+impl Instruction {
+    pub fn pc(&self) -> u32 {
+        match self {
+            Self::DataWord { pc, .. } | Self::Primary { pc, .. } => *pc,
+        }
+    }
+
+    pub fn end_pc(&self) -> u32 {
+        match self {
+            Self::DataWord { end_pc, .. } | Self::Primary { end_pc, .. } => *end_pc,
+        }
+    }
+
+    pub fn opcode(&self) -> Option<u16> {
+        match self {
+            Self::Primary { opcode, .. } => Some(*opcode),
+            Self::DataWord { .. } => None,
+        }
+    }
+
+    pub fn flow_edges(&self) -> Vec<FlowEdge> {
+        let Self::Primary {
+            opcode,
+            args,
+            end_pc,
+            ..
+        } = self
+        else {
+            return vec![FlowEdge {
+                kind: FlowEdgeKind::Fallthrough,
+                target_pc: Some(self.end_pc()),
+                point_id: None,
+            }];
+        };
+
+        match *opcode {
+            9 => {
+                let (point_id, target_pc) = point_target_from_arg(args.first());
+                vec![FlowEdge {
+                    kind: FlowEdgeKind::Jump,
+                    target_pc,
+                    point_id,
+                }]
+            }
+            10 => {
+                let (point_id, target_pc) = point_target_from_arg(args.first());
+                vec![
+                    FlowEdge {
+                        kind: FlowEdgeKind::BranchFalse,
+                        target_pc,
+                        point_id,
+                    },
+                    FlowEdge {
+                        kind: FlowEdgeKind::BranchTrue,
+                        target_pc: Some(*end_pc),
+                        point_id: None,
+                    },
+                ]
+            }
+            11 => {
+                let (point_id, target_pc) = point_target_from_arg(args.first());
+                vec![
+                    FlowEdge {
+                        kind: FlowEdgeKind::Call,
+                        target_pc,
+                        point_id,
+                    },
+                    FlowEdge {
+                        kind: FlowEdgeKind::Fallthrough,
+                        target_pc: Some(*end_pc),
+                        point_id: None,
+                    },
+                ]
+            }
+            21 => vec![FlowEdge {
+                kind: FlowEdgeKind::Halt,
+                target_pc: None,
+                point_id: None,
+            }],
+            24 => vec![FlowEdge {
+                kind: FlowEdgeKind::Return,
+                target_pc: None,
+                point_id: None,
+            }],
+            252 | 253 => vec![FlowEdge {
+                kind: FlowEdgeKind::Wait,
+                target_pc: Some(*end_pc),
+                point_id: None,
+            }],
+            _ => vec![FlowEdge {
+                kind: FlowEdgeKind::Fallthrough,
+                target_pc: Some(*end_pc),
+                point_id: None,
+            }],
+        }
+    }
+}
+
+fn point_target_from_arg(arg: Option<&Argument>) -> (Option<u32>, Option<u32>) {
+    match arg {
+        Some(Argument::Point { id, target_pc }) => (Some(*id), *target_pc),
+        Some(Argument::PointOperand {
+            point_id,
+            target_pc,
+            ..
+        }) => (*point_id, *target_pc),
+        _ => (None, None),
+    }
+}
+
 impl fmt::Display for Argument {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -186,6 +487,17 @@ impl fmt::Display for Argument {
             Self::Point { id, target_pc } => match target_pc {
                 Some(target) => write!(f, "point[{id}] -> 0x{target:08X}"),
                 None => write!(f, "point[{id}]"),
+            },
+            Self::PointOperand {
+                operand,
+                point_id,
+                target_pc,
+            } => match (point_id, target_pc) {
+                (Some(id), Some(target)) => {
+                    write!(f, "point_operand({operand}) point[{id}] -> 0x{target:08X}")
+                }
+                (Some(id), None) => write!(f, "point_operand({operand}) point[{id}]"),
+                (None, _) => write!(f, "point_operand({operand})"),
             },
             Self::RawSlot { slot, raw } => write!(f, "slot[{slot}] raw=0x{raw:08X}"),
             Self::ExtCall {
@@ -205,15 +517,16 @@ impl fmt::Display for Argument {
 impl fmt::Display for Instruction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::DataWord { pc, word } => write!(f, "{pc:08X}: .word 0x{word:08X}"),
+            Self::DataWord { pc, word, .. } => write!(f, "{pc:08X}: .word 0x{word:08X}"),
             Self::Primary {
                 pc,
                 word,
                 opcode,
                 meta,
                 args,
+                ..
             } => {
-                let mut generated_name = String::new();
+                let generated_name;
                 let name = match meta {
                     Some(meta) => meta.name,
                     None => {

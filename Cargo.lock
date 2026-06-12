@@ -2301,12 +2301,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "pal-decompiler"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "encoding_rs",
+ "pal-asset",
+ "pal-script",
+]
+
+[[package]]
 name = "pal-disassembled"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
  "pal-script",
+]
+
+[[package]]
+name = "pal-pac-unpacker"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "encoding_rs",
 ]
 
 [[package]]
@@ -2327,6 +2346,7 @@ dependencies = [
  "log",
  "pal-asset",
  "pal-script",
+ "png",
  "pollster 0.4.0",
  "softbuffer",
  "wgpu 29.0.3",

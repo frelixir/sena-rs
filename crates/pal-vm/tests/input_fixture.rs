@@ -126,6 +126,25 @@ fn mouse_position_tracks_cursor_moved() {
 }
 
 #[test]
+fn mouse_position_maps_physical_window_to_pal_logical_space() {
+    let mut input = PalInputState::new();
+    input.set_coordinate_space(2560, 1440, 1280, 720);
+    input.handle_cursor_moved(386.0, 520.0);
+    assert_eq!(input.mouse_position(), (193, 260));
+}
+
+#[test]
+fn coordinate_space_update_reprojects_current_cursor() {
+    let mut input = PalInputState::new();
+    input.set_coordinate_space(1280, 720, 1280, 720);
+    input.handle_cursor_moved(193.0, 260.0);
+    assert_eq!(input.mouse_position(), (193, 260));
+
+    input.set_coordinate_space(2560, 1440, 1280, 720);
+    assert_eq!(input.mouse_position(), (97, 130));
+}
+
+#[test]
 fn mouse_delta_accumulates_within_frame() {
     let mut input = PalInputState::new();
     // First event: no delta yet (cursor not initialized)
@@ -204,6 +223,13 @@ fn any_push_true_when_key_pressed() {
 fn any_push_true_when_mouse_pressed() {
     let mut input = PalInputState::new();
     input.handle_mouse_button_event(MouseButton::Left, true);
+    assert!(input.any_push());
+}
+
+#[test]
+fn any_push_true_when_mouse_wheel_scrolled_forward() {
+    let mut input = PalInputState::new();
+    input.handle_mouse_wheel(0.0, 1.0);
     assert!(input.any_push());
 }
 

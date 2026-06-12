@@ -13,8 +13,8 @@ pub struct FrameScene {
 }
 
 impl FrameScene {
-    pub const PAL_DEFAULT_WIDTH: u32 = 1920;
-    pub const PAL_DEFAULT_HEIGHT: u32 = 1080;
+    pub const PAL_DEFAULT_WIDTH: u32 = 1280;
+    pub const PAL_DEFAULT_HEIGHT: u32 = 720;
 
     pub fn boot() -> Self {
         Self {
@@ -177,4 +177,120 @@ impl RectF {
     pub fn is_drawable(self) -> bool {
         self.w.abs() > f32::EPSILON && self.h.abs() > f32::EPSILON
     }
+}
+
+pub fn rasterize_scene_rgba(scene: &FrameScene) -> Vec<u8> {
+    let width = scene.logical_width.max(1);
+    let height = scene.logical_height.max(1);
+    let mut pixels = vec![0u8; width as usize * height as usize * 4];
+    let bg = [
+        (scene.clear_color[0].clamp(0.0, 1.0) * 255.0) as u8,
+        (scene.clear_color[1].clamp(0.0, 1.0) * 255.0) as u8,
+        (scene.clear_color[2].clamp(0.0, 1.0) * 255.0) as u8,
+        255,
+    ];
+    for px in pixels.chunks_exact_mut(4) {
+        px.copy_from_slice(&bg);
+    }
+    for command in &scene.commands {
+        match command {
+            DrawCommand::Sprite(sprite) => {
+                if let Some(texture) = scene
+                    .textures
+                    .iter()
+                    .find(|texture| texture.id == sprite.texture_id)
+                {
+                    blit_sprite(
+                        &mut pixels,
+                        width,
+                        height,
+                        texture,
+                        sprite.dst,
+                        sprite.source_rect,
+                        sprite.color,
+                    );
+                }
+            }
+            DrawCommand::SolidQuad(quad) => {
+                fill_rect(&mut pixels, width, height, quad.dst, quad.color);
+            }
+        }
+    }
+    pixels
+}
+
+fn blit_sprite(
+    target: &mut [u8],
+    target_width: u32,
+    target_height: u32,
+    texture: &SceneTexture,
+    dst: RectF,
+    source_rect: [i32; 4],
+    color: [f32; 4],
+) {
+    let x0 = dst.x.floor().max(0.0) as i32;
+    let y0 = dst.y.floor().max(0.0) as i32;
+    let x1 = (dst.x + dst.w).ceil().min(target_width as f32) as i32;
+    let y1 = (dst.y + dst.h).ceil().min(target_height as f32) as i32;
+    if x1 <= x0 || y1 <= y0 || dst.w.abs() < f32::EPSILON || dst.h.abs() < f32::EPSILON {
+        return;
+    }
+    let sx0 = source_rect[0].max(0) as f32;
+    let sy0 = source_rect[1].max(0) as f32;
+    let sw = source_rect[2].saturating_sub(source_rect[0]).max(1) as f32;
+    let sh = source_rect[3].saturating_sub(source_rect[1]).max(1) as f32;
+    for y in y0..y1 {
+        let v = ((y as f32 + 0.5 - dst.y) / dst.h).clamp(0.0, 1.0);
+        let sy = (sy0 + v * sh)
+            .floor()
+            .clamp(0.0, texture.height.saturating_sub(1) as f32) as u32;
+        for x in x0..x1 {
+            let u = ((x as f32 + 0.5 - dst.x) / dst.w).clamp(0.0, 1.0);
+            let sx = (sx0 + u * sw)
+                .floor()
+                .clamp(0.0, texture.width.saturating_sub(1) as f32) as u32;
+            let src_idx = (sy as usize * texture.width as usize + sx as usize) * 4;
+            let src = [
+                texture.pixels[src_idx] as f32 * color[0].clamp(0.0, 1.0),
+                texture.pixels[src_idx + 1] as f32 * color[1].clamp(0.0, 1.0),
+                texture.pixels[src_idx + 2] as f32 * color[2].clamp(0.0, 1.0),
+                texture.pixels[src_idx + 3] as f32 * color[3].clamp(0.0, 1.0),
+            ];
+            blend_pixel(target, target_width, x as u32, y as u32, src);
+        }
+    }
+}
+
+fn fill_rect(
+    target: &mut [u8],
+    target_width: u32,
+    target_height: u32,
+    rect: RectF,
+    color: [f32; 4],
+) {
+    let x0 = rect.x.floor().max(0.0) as i32;
+    let y0 = rect.y.floor().max(0.0) as i32;
+    let x1 = (rect.x + rect.w).ceil().min(target_width as f32) as i32;
+    let y1 = (rect.y + rect.h).ceil().min(target_height as f32) as i32;
+    let src = [
+        color[0].clamp(0.0, 1.0) * 255.0,
+        color[1].clamp(0.0, 1.0) * 255.0,
+        color[2].clamp(0.0, 1.0) * 255.0,
+        color[3].clamp(0.0, 1.0) * 255.0,
+    ];
+    for y in y0..y1 {
+        for x in x0..x1 {
+            blend_pixel(target, target_width, x as u32, y as u32, src);
+        }
+    }
+}
+
+fn blend_pixel(target: &mut [u8], target_width: u32, x: u32, y: u32, src: [f32; 4]) {
+    let idx = (y as usize * target_width as usize + x as usize) * 4;
+    let alpha = (src[3] / 255.0).clamp(0.0, 1.0);
+    let inv_alpha = 1.0 - alpha;
+    target[idx] = (src[0] * alpha + target[idx] as f32 * inv_alpha).round() as u8;
+    target[idx + 1] = (src[1] * alpha + target[idx + 1] as f32 * inv_alpha).round() as u8;
+    target[idx + 2] = (src[2] * alpha + target[idx + 2] as f32 * inv_alpha).round() as u8;
+    target[idx + 3] = 255;
 }

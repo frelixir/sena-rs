@@ -1,11 +1,6 @@
 [workspace]
 members = [
-    "crates/pal-script",
-    "crates/pal-asset",
-    "crates/pal-assets",
-    "crates/pal-disassembled",
-    "crates/pal-vm",
-    "crates/na_wmv_player",
+    "crates/*",
 ]
 resolver = "2"
 

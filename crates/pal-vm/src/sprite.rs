@@ -29,6 +29,7 @@ pub struct SpriteSystem {
     render_nodes: BTreeMap<RenderNodeId, RenderNode>,
     transitions: BTreeMap<SpriteTransitionHandle, SpriteTransition>,
     fx_effects: BTreeMap<SpriteFxHandle, SpriteFxEffect>,
+    motion_entries: BTreeMap<SpriteHandle, SpriteMotionEntry>,
 }
 
 impl SpriteSystem {
@@ -44,6 +45,7 @@ impl SpriteSystem {
             render_nodes: BTreeMap::new(),
             transitions: BTreeMap::new(),
             fx_effects: BTreeMap::new(),
+            motion_entries: BTreeMap::new(),
         }
     }
 
@@ -185,8 +187,13 @@ impl SpriteSystem {
         let Some(sprite) = self.sprites.remove(&handle) else {
             return false;
         };
+        let surface = sprite.surface;
+        self.motion_entries.remove(&handle);
         if let Some(render_node) = sprite.render_node {
             self.render_nodes.remove(&render_node);
+        }
+        if !self.sprites.values().any(|other| other.surface == surface) {
+            self.surfaces.remove(&surface);
         }
         true
     }
@@ -258,9 +265,15 @@ impl SpriteSystem {
         let to = transition.to;
         if let Some(sprite) = from.and_then(|sprite| self.get_mut(sprite)) {
             sprite.transition_block = 0;
+            if sprite.source_name.starts_with("screen-copy:") {
+                sprite.visible = false;
+            }
         }
         if let Some(sprite) = to.and_then(|sprite| self.get_mut(sprite)) {
             sprite.transition_block = 0;
+            if sprite.source_name.starts_with("screen-copy:") {
+                sprite.visible = false;
+            }
         }
         if let Some(transition) = self.transitions.get_mut(&handle) {
             *transition = SpriteTransition::default();
@@ -301,6 +314,93 @@ impl SpriteSystem {
         }
     }
 
+    pub fn tween_pos_by(
+        &mut self,
+        handle: SpriteHandle,
+        dx: f32,
+        dy: f32,
+        dz: f32,
+        duration_ms: u32,
+    ) -> bool {
+        let Some(sprite) = self.get(handle) else {
+            return false;
+        };
+        let initial_entry = SpriteMotionEntry::from_sprite(handle, sprite);
+        if duration_ms == 0 {
+            return self.move_pos(handle, dx, dy, dz);
+        }
+        let from = sprite.position;
+        let to = PalVec3::from_f32(from.x + dx, from.y + dy, from.z + dz);
+        let entry = self.motion_entries.entry(handle).or_insert(initial_entry);
+        entry.pos_b = to;
+        entry.anim_delta_pos = Some(SpritePositionTween {
+            from,
+            to,
+            elapsed_ms: 0,
+            duration_ms,
+        });
+        true
+    }
+
+    /// Advances the Game.exe `SpriteMotionEntry` analogue recovered in the
+    /// latest IDB.  Native `VmTask_ApplyMotion` walks `gSpriteMotionList` and
+    /// commits layered position/scale/color deltas into the wrapped PalSprite;
+    /// the Rust port keeps only the currently implemented named-ANI lanes here.
+    pub fn advance_motion_entries(&mut self, delta_ms: u32) {
+        let handles = self.motion_entries.keys().copied().collect::<Vec<_>>();
+        for handle in handles {
+            let Some(mut entry) = self.motion_entries.remove(&handle) else {
+                continue;
+            };
+
+            if let Some(mut tween) = entry.anim_delta_pos {
+                tween.elapsed_ms = tween.elapsed_ms.saturating_add(delta_ms);
+                let t = (tween.elapsed_ms as f32 / tween.duration_ms.max(1) as f32).clamp(0.0, 1.0);
+                let x = tween.from.x + (tween.to.x - tween.from.x) * t;
+                let y = tween.from.y + (tween.to.y - tween.from.y) * t;
+                let z = tween.from.z + (tween.to.z - tween.from.z) * t;
+                let _ = self.set_pos_float(handle, x, y, z);
+                if tween.elapsed_ms < tween.duration_ms {
+                    entry.anim_delta_pos = Some(tween);
+                } else {
+                    entry.pos_b = tween.to;
+                    entry.anim_delta_pos = None;
+                }
+            }
+
+            if let Some(mut tween) = entry.anim_delta_scale {
+                tween.elapsed_ms = tween.elapsed_ms.saturating_add(delta_ms);
+                let t = (tween.elapsed_ms as f32 / tween.duration_ms.max(1) as f32).clamp(0.0, 1.0);
+                let scale = tween.from + (tween.to - tween.from) * t;
+                let _ = self.set_scale(handle, scale);
+                if tween.elapsed_ms < tween.duration_ms {
+                    entry.anim_delta_scale = Some(tween);
+                } else {
+                    entry.scale_b = tween.to;
+                    entry.anim_delta_scale = None;
+                }
+            }
+
+            if let Some(mut tween) = entry.anim_delta_color_a {
+                tween.elapsed_ms = tween.elapsed_ms.saturating_add(delta_ms);
+                let t = (tween.elapsed_ms as f32 / tween.duration_ms.max(1) as f32).clamp(0.0, 1.0);
+                let alpha = tween.from as f32 + (tween.to as f32 - tween.from as f32) * t;
+                let alpha = alpha.round().clamp(0.0, 255.0) as u8;
+                let _ = self.set_alpha(handle, alpha);
+                if tween.elapsed_ms < tween.duration_ms {
+                    entry.anim_delta_color_a = Some(tween);
+                } else {
+                    entry.color_a = tween.to;
+                    entry.anim_delta_color_a = None;
+                }
+            }
+
+            if entry.has_active_animation() && self.sprites.contains_key(&handle) {
+                self.motion_entries.insert(handle, entry);
+            }
+        }
+    }
+
     pub fn transition_commands(&self) -> Vec<DrawCommand> {
         let mut commands = Vec::new();
         for transition in self.transitions.values() {
@@ -336,6 +436,11 @@ impl SpriteSystem {
             }
         }
         commands
+    }
+
+    pub fn is_screen_copy(&self, handle: SpriteHandle) -> bool {
+        self.get(handle)
+            .is_some_and(|sprite| sprite.source_name.starts_with("screen-copy:"))
     }
 
     pub fn set_sprite_fx_effect(
@@ -598,6 +703,12 @@ impl SpriteSystem {
     }
 
     pub fn set_scale(&mut self, handle: SpriteHandle, scale: f32) -> bool {
+        if let Some(entry) = self.motion_entries.get_mut(&handle) {
+            entry.anim_delta_scale = None;
+            if !entry.has_active_animation() {
+                self.motion_entries.remove(&handle);
+            }
+        }
         match self.get_mut(handle) {
             Some(sprite) => {
                 sprite.scale = scale;
@@ -605,6 +716,63 @@ impl SpriteSystem {
             }
             None => false,
         }
+    }
+
+    pub fn set_alpha(&mut self, handle: SpriteHandle, alpha: u8) -> bool {
+        if let Some(entry) = self.motion_entries.get_mut(&handle) {
+            entry.anim_delta_color_a = None;
+            if !entry.has_active_animation() {
+                self.motion_entries.remove(&handle);
+            }
+        }
+        match self.get_mut(handle) {
+            Some(sprite) => {
+                let raw = sprite.color.0 & 0x00FF_FFFF;
+                sprite.color = PalColor::from_argb(raw | ((alpha as u32) << 24));
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn tween_scale_to(&mut self, handle: SpriteHandle, scale: f32, duration_ms: u32) -> bool {
+        let Some(sprite) = self.get(handle) else {
+            return false;
+        };
+        let initial_entry = SpriteMotionEntry::from_sprite(handle, sprite);
+        let from = sprite.scale;
+        if duration_ms == 0 {
+            return self.set_scale(handle, scale);
+        }
+        let entry = self.motion_entries.entry(handle).or_insert(initial_entry);
+        entry.scale_b = scale;
+        entry.anim_delta_scale = Some(SpriteScaleTween {
+            from,
+            to: scale,
+            elapsed_ms: 0,
+            duration_ms,
+        });
+        true
+    }
+
+    pub fn tween_alpha_to(&mut self, handle: SpriteHandle, alpha: u8, duration_ms: u32) -> bool {
+        let Some(sprite) = self.get(handle) else {
+            return false;
+        };
+        let initial_entry = SpriteMotionEntry::from_sprite(handle, sprite);
+        if duration_ms == 0 {
+            return self.set_alpha(handle, alpha);
+        }
+        let from = sprite.color.alpha();
+        let entry = self.motion_entries.entry(handle).or_insert(initial_entry);
+        entry.color_a = alpha;
+        entry.anim_delta_color_a = Some(SpriteAlphaTween {
+            from,
+            to: alpha,
+            elapsed_ms: 0,
+            duration_ms,
+        });
+        true
     }
 
     pub fn set_rotate(&mut self, handle: SpriteHandle, angle_z: f32) -> bool {
@@ -839,6 +1007,9 @@ impl SpriteSystem {
 
     pub fn commands(&self) -> Vec<DrawCommand> {
         let mut nodes = self.render_nodes.values().collect::<Vec<_>>();
+        // PAL keeps same-priority sprites in creation/render-entry order; later
+        // entries are drawn later.  The SYSTEM menu depends on this because it
+        // creates SYS_BASE at z=0 over the older TITLE_BASE at z=0.
         nodes.sort_by_key(|node| (node.priority, node.id.0));
         nodes
             .into_iter()
@@ -868,6 +1039,10 @@ impl SpriteSystem {
 
     pub fn len(&self) -> usize {
         self.sprites.len()
+    }
+
+    pub fn motion_entry_count(&self) -> usize {
+        self.motion_entries.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1303,14 +1478,14 @@ impl PalSprite {
     }
 
     pub fn draw_command(&self, sprites: &SpriteSystem) -> Option<DrawCommand> {
-        if self.transition_block != 0 || !self.visible || self.locked {
+        if self.transition_block != 0 || !self.visible || self.locked || self.color.alpha() == 0 {
             return None;
         }
         self.draw_command_inner(sprites)
     }
 
     fn draw_command_transition(&self, sprites: &SpriteSystem) -> Option<DrawCommand> {
-        if !self.visible || self.locked {
+        if !self.visible || self.locked || self.color.alpha() == 0 {
             return None;
         }
         self.draw_command_inner(sprites)
@@ -1321,7 +1496,17 @@ impl PalSprite {
         let dst_pos = self.effective_position();
         let width = self.source_rect.width() as f32;
         let height = self.source_rect.height() as f32;
-        let dst = RectF::new(dst_pos.x as f32, dst_pos.y as f32, width, height);
+        let scale = self.scale.max(0.0);
+        let scaled_width = width * scale;
+        let scaled_height = height * scale;
+        let center_x = self.center_offset.x as f32;
+        let center_y = self.center_offset.y as f32;
+        let dst = RectF::new(
+            dst_pos.x as f32 - center_x * (scale - 1.0),
+            dst_pos.y as f32 - center_y * (scale - 1.0),
+            scaled_width,
+            scaled_height,
+        );
         if !dst.is_drawable() {
             return None;
         }
@@ -1497,6 +1682,70 @@ pub struct SpriteFxEffect {
     pub active: bool,
 }
 
+/// Portable subset of Game.exe `SpriteMotionEntry`.
+///
+/// Latest IDB evidence declares the native entry as 688 bytes / 172 DWORDs:
+/// `[0] PalSprite *sprite`, base/final position and rotation lanes, scale,
+/// color/alpha lanes, an animation-delta block at byte offsets 376..451, and
+/// `[171] next` for `gSpriteMotionList`.  This Rust struct intentionally
+/// stores only the lanes currently implemented by named ANI playback.  Keeping
+/// them together prevents the old port mistake of treating move/scale/alpha as
+/// unrelated sprite-local tweens.
+#[derive(Clone, Copy, Debug)]
+pub struct SpriteMotionEntry {
+    pub sprite: SpriteHandle,
+    pub pos_b: PalVec3,
+    pub scale_b: f32,
+    pub color_a: u8,
+    anim_delta_pos: Option<SpritePositionTween>,
+    anim_delta_scale: Option<SpriteScaleTween>,
+    anim_delta_color_a: Option<SpriteAlphaTween>,
+}
+
+impl SpriteMotionEntry {
+    fn from_sprite(sprite: SpriteHandle, state: &PalSprite) -> Self {
+        Self {
+            sprite,
+            pos_b: state.position,
+            scale_b: state.scale,
+            color_a: state.color.alpha(),
+            anim_delta_pos: None,
+            anim_delta_scale: None,
+            anim_delta_color_a: None,
+        }
+    }
+
+    fn has_active_animation(&self) -> bool {
+        self.anim_delta_pos.is_some()
+            || self.anim_delta_scale.is_some()
+            || self.anim_delta_color_a.is_some()
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SpritePositionTween {
+    from: PalVec3,
+    to: PalVec3,
+    elapsed_ms: u32,
+    duration_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SpriteScaleTween {
+    from: f32,
+    to: f32,
+    elapsed_ms: u32,
+    duration_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SpriteAlphaTween {
+    from: u8,
+    to: u8,
+    elapsed_ms: u32,
+    duration_ms: u32,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PalAnimationAxis {
     Horizontal,
@@ -1649,6 +1898,10 @@ impl PalColor {
             (self.0 & 0xFF) as u8,
             ((self.0 >> 24) & 0xFF) as u8,
         ]
+    }
+
+    pub const fn alpha(self) -> u8 {
+        ((self.0 >> 24) & 0xFF) as u8
     }
 }
 

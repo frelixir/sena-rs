@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use pal_asset::Nls;
 use winit::application::ApplicationHandler;
@@ -13,8 +14,8 @@ use crate::audio::AudioConfig;
 use crate::engine::{Engine, EngineConfig, TraceConfig};
 use crate::event::{InputEvent, MouseButton, PalEvent};
 use crate::renderer::{RenderOutcome, Renderer, RendererConfig};
-use crate::runtime::ScriptRuntimeConfig;
-use crate::scene::FrameScene;
+use crate::runtime::{RuntimeStatus, ScriptRuntimeConfig};
+use crate::scene::{rasterize_scene_rgba, FrameScene};
 
 #[derive(Clone, Debug)]
 pub struct SenaConfig {
@@ -31,8 +32,21 @@ pub struct SenaConfig {
     pub trace_sprites: bool,
     pub trace_assets: bool,
     pub trace_render: bool,
+    pub trace_buttons: bool,
     pub script_budget_per_frame: usize,
     pub audio: AudioConfig,
+    pub headless: bool,
+    pub diagnostic_frames: usize,
+    pub diagnostic_frame_ms: u64,
+    pub diagnostic_png: Option<PathBuf>,
+    pub diagnostic_clicks: Vec<DiagnosticClick>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DiagnosticClick {
+    pub frame: usize,
+    pub x: i32,
+    pub y: i32,
 }
 
 impl Default for SenaConfig {
@@ -51,18 +65,128 @@ impl Default for SenaConfig {
             trace_sprites: false,
             trace_assets: false,
             trace_render: false,
+            trace_buttons: false,
             script_budget_per_frame: ScriptRuntimeConfig::default().instructions_per_frame,
             audio: AudioConfig::default(),
+            headless: false,
+            diagnostic_frames: 120,
+            diagnostic_frame_ms: 16,
+            diagnostic_png: None,
+            diagnostic_clicks: Vec::new(),
         }
     }
 }
 
 pub fn run_sena(config: SenaConfig) -> anyhow::Result<()> {
+    if config.headless {
+        return run_sena_headless(config);
+    }
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = SenaApplication::new(config)?;
     event_loop.run_app(&mut app)?;
     Ok(())
+}
+
+pub fn run_sena_headless(config: SenaConfig) -> anyhow::Result<()> {
+    let mut engine = build_engine(&config)?;
+    if config.print_loaded_assets {
+        print_asset_summary(&engine);
+    }
+    let (width, height) = if config.prefer_config_window_size {
+        engine.window_size_from_config(config.width, config.height)
+    } else {
+        (config.width, config.height)
+    };
+    engine.handle_event(PalEvent::Resized { width, height });
+    let (logical_width, logical_height) = engine.logical_size_from_config(
+        FrameScene::PAL_DEFAULT_WIDTH,
+        FrameScene::PAL_DEFAULT_HEIGHT,
+    );
+    eprintln!(
+        "[headless] start logical={}x{} window={}x{} frames={} frame_ms={} runtime={}",
+        logical_width,
+        logical_height,
+        width,
+        height,
+        config.diagnostic_frames,
+        config.diagnostic_frame_ms,
+        engine.runtime_status()
+    );
+
+    let mut last_frame = None;
+    for frame_index in 0..config.diagnostic_frames {
+        engine.input_begin_frame();
+        for click in &config.diagnostic_clicks {
+            if frame_index == click.frame {
+                engine.handle_event(PalEvent::Input(InputEvent::CursorMoved {
+                    x: click.x as f64,
+                    y: click.y as f64,
+                }));
+                engine.handle_event(PalEvent::Input(InputEvent::MouseInput {
+                    button: MouseButton::Left,
+                    pressed: true,
+                }));
+                eprintln!(
+                    "[headless] injected click press frame={} pos=({}, {})",
+                    frame_index, click.x, click.y
+                );
+            } else if frame_index == click.frame.saturating_add(1) {
+                engine.handle_event(PalEvent::Input(InputEvent::MouseInput {
+                    button: MouseButton::Left,
+                    pressed: false,
+                }));
+                eprintln!("[headless] injected click release frame={frame_index}");
+            }
+        }
+        engine.handle_event(PalEvent::RedrawRequested);
+        let frame =
+            engine.update_with_delta(Duration::from_millis(config.diagnostic_frame_ms.max(1)))?;
+        let event_count = frame
+            .runtime_tick
+            .as_ref()
+            .map(|tick| tick.frame_events.len())
+            .unwrap_or_default();
+        eprintln!(
+            "[headless] frame={} clock={} dt={}ms elapsed={}ms status={} textures={} draw_commands={} events={} clear={:?}",
+            frame_index,
+            frame.timing.frame_index,
+            frame.timing.delta.as_millis(),
+            frame.timing.elapsed.as_millis(),
+            frame.runtime_status,
+            frame.scene.textures.len(),
+            frame.scene.commands.len(),
+            event_count,
+            frame.scene.clear_color
+        );
+        let terminal = runtime_status_is_terminal(&frame.runtime_status);
+        last_frame = Some(frame);
+        if terminal {
+            eprintln!(
+                "[headless] stop: terminal runtime status {}",
+                last_frame
+                    .as_ref()
+                    .expect("frame was just stored")
+                    .runtime_status
+            );
+            break;
+        }
+    }
+    if let (Some(path), Some(frame)) = (&config.diagnostic_png, last_frame.as_ref()) {
+        write_scene_png(&frame.scene, path)?;
+        eprintln!("[headless] wrote diagnostic png {}", path.display());
+    }
+    Ok(())
+}
+
+fn runtime_status_is_terminal(status: &RuntimeStatus) -> bool {
+    matches!(
+        status,
+        RuntimeStatus::Halted { .. }
+            | RuntimeStatus::UnsupportedCommand { .. }
+            | RuntimeStatus::UnsupportedExtCall { .. }
+            | RuntimeStatus::Faulted { .. }
+    )
 }
 
 struct SenaApplication {
@@ -74,22 +198,7 @@ struct SenaApplication {
 
 impl SenaApplication {
     fn new(config: SenaConfig) -> anyhow::Result<Self> {
-        let engine = Engine::new(EngineConfig {
-            game_root: config.game_root.clone(),
-            nls: config.nls,
-            script_runtime: ScriptRuntimeConfig {
-                instructions_per_frame: config.script_budget_per_frame,
-                trace: config.trace_script,
-            },
-            audio: config.audio.clone(),
-            trace: TraceConfig {
-                script: config.trace_script,
-                scene: config.trace_scene,
-                sprites: config.trace_sprites,
-                assets: config.trace_assets,
-                render: config.trace_render,
-            },
-        })?;
+        let engine = build_engine(&config)?;
         if config.print_loaded_assets {
             print_asset_summary(&engine);
         }
@@ -119,6 +228,11 @@ impl SenaApplication {
                 .create_window(attrs)
                 .expect("sena failed to create a winit window"),
         );
+        let actual_size = window.inner_size();
+        self.engine.handle_event(PalEvent::Resized {
+            width: actual_size.width,
+            height: actual_size.height,
+        });
         let mut renderer_config = self.config.renderer;
         renderer_config.virtual_width = width.max(1);
         renderer_config.virtual_height = height.max(1);
@@ -142,17 +256,19 @@ impl SenaApplication {
         }
     }
 
-    fn render(&mut self, event_loop: &ActiveEventLoop) {
+    fn render(&mut self, _event_loop: &ActiveEventLoop) {
         self.engine.handle_event(PalEvent::RedrawRequested);
         let frame = match self.engine.update() {
             Ok(frame) => frame,
             Err(err) => {
                 // Log the error but keep the window open so the user can see what happened.
                 log::error!("sena engine update failed: {err}");
+                self.engine.input_begin_frame();
                 return;
             }
         };
         let Some(renderer) = self.renderer.as_mut() else {
+            self.engine.input_begin_frame();
             return;
         };
         match renderer.render(&frame.scene) {
@@ -160,7 +276,45 @@ impl SenaApplication {
             RenderOutcome::Skipped => {}
             RenderOutcome::Reconfigured => log::debug!("software surface was reconfigured"),
         }
+        self.engine.input_begin_frame();
     }
+}
+
+fn build_engine(config: &SenaConfig) -> anyhow::Result<Engine> {
+    Engine::new(EngineConfig {
+        game_root: config.game_root.clone(),
+        nls: config.nls,
+        script_runtime: ScriptRuntimeConfig {
+            instructions_per_frame: config.script_budget_per_frame,
+            trace: config.trace_script,
+        },
+        audio: config.audio.clone(),
+        trace: TraceConfig {
+            script: config.trace_script,
+            scene: config.trace_scene,
+            sprites: config.trace_sprites,
+            assets: config.trace_assets,
+            render: config.trace_render,
+            buttons: config.trace_buttons,
+        },
+    })
+}
+
+fn write_scene_png(scene: &FrameScene, path: &PathBuf) -> anyhow::Result<()> {
+    let width = scene.logical_width.max(1);
+    let height = scene.logical_height.max(1);
+    let pixels = rasterize_scene_rgba(scene);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::File::create(path)?;
+    let writer = std::io::BufWriter::new(file);
+    let mut encoder = png::Encoder::new(writer, width, height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header()?;
+    writer.write_image_data(&pixels)?;
+    Ok(())
 }
 
 impl ApplicationHandler for SenaApplication {
@@ -228,8 +382,6 @@ impl ApplicationHandler for SenaApplication {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        // Clear per-frame transient state before new events for this frame arrive.
-        self.engine.input_begin_frame();
         if let Some(window) = self.window.as_ref() {
             window.request_redraw();
         }

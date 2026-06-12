@@ -121,6 +121,15 @@ impl PalFontFallback {
     /// Construct using the embedded default.ttf.  Panics only if the embedded file
     /// is corrupt (which would be a build-time error, not a runtime condition).
     pub fn default_ttf() -> Self {
+        for path in SYSTEM_CJK_FONT_CANDIDATES {
+            let Ok(bytes) = std::fs::read(path) else {
+                continue;
+            };
+            let leaked: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+            if let Ok(font) = FontRef::try_from_slice(leaked) {
+                return Self { font };
+            }
+        }
         let font = FontRef::try_from_slice(DEFAULT_TTF_BYTES)
             .expect("default.ttf embedded in pal-vm is not a valid TrueType font");
         Self { font }
@@ -188,6 +197,17 @@ impl PalFontFallback {
         (w as u32, h as u32, pixels)
     }
 }
+
+const SYSTEM_CJK_FONT_CANDIDATES: &[&str] = &[
+    "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+    "/Library/Fonts/Arial Unicode.ttf",
+    "/System/Library/Fonts/ヒラギノ角ゴシック W4.ttc",
+    "/System/Library/Fonts/Hiragino Sans GB.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+    "C:/Windows/Fonts/msyh.ttc",
+    "C:/Windows/Fonts/msgothic.ttc",
+];
 
 fn argb_to_bgra(color: u32) -> [u8; 4] {
     [

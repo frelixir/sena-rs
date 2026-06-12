@@ -9,13 +9,15 @@ use pal_script::read_u32_le;
 pub struct EngineStartupConfig {
     pub config_dat: Option<ConfigDat>,
     pub system_dat: Option<SystemDat>,
+    pub system_ini: Option<IniFile>,
 }
 
 impl EngineStartupConfig {
-    pub fn load(root: &Path) -> anyhow::Result<Self> {
+    pub fn load(root: &Path, nls: Nls) -> anyhow::Result<Self> {
         Ok(Self {
             config_dat: ConfigDat::load_optional(root)?,
             system_dat: SystemDat::load_optional(root)?,
+            system_ini: load_system_ini(root, nls)?,
         })
     }
 
@@ -29,6 +31,17 @@ impl EngineStartupConfig {
         self.config_dat
             .as_ref()
             .map_or(fallback, |config| config.height)
+    }
+
+    pub fn window_size(&self, fallback_width: u32, fallback_height: u32) -> (u32, u32) {
+        (
+            self.window_width(fallback_width),
+            self.window_height(fallback_height),
+        )
+    }
+
+    pub fn logical_size(&self, fallback_width: u32, fallback_height: u32) -> (u32, u32) {
+        ini_graphics_size(self.system_ini.as_ref(), fallback_width, fallback_height)
     }
 }
 
@@ -180,6 +193,28 @@ impl IniValue {
 
 /// All sections of an INI file, keyed by lowercased section name.
 pub type IniFile = BTreeMap<String, IniSection>;
+
+pub fn ini_graphics_size(
+    ini: Option<&IniFile>,
+    fallback_width: u32,
+    fallback_height: u32,
+) -> (u32, u32) {
+    let width = ini
+        .and_then(|ini| ini.get("graphics"))
+        .and_then(|section| section.get("def_cg_width"))
+        .and_then(|value| value.as_int())
+        .filter(|value| *value > 0)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or(fallback_width);
+    let height = ini
+        .and_then(|ini| ini.get("graphics"))
+        .and_then(|section| section.get("def_cg_height"))
+        .and_then(|value| value.as_int())
+        .filter(|value| *value > 0)
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or(fallback_height);
+    (width.max(1), height.max(1))
+}
 
 /// Parse a raw byte buffer as an NLS-encoded INI file.
 ///

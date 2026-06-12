@@ -5,7 +5,7 @@ use pal_asset::{Nls, ResourceManager};
 
 use crate::assets::CoreAssets;
 use crate::audio::{AudioConfig, AudioHandle, AudioSystem, PalSoundGroup};
-use crate::config::EngineStartupConfig;
+use crate::config::{ini_graphics_size, EngineStartupConfig};
 use crate::debug::{collect_frame_dump, pal_debug_enabled, print_dump};
 use crate::event::PalEvent;
 use crate::input::PalInputState;
@@ -14,6 +14,8 @@ use crate::scene::FrameScene;
 use crate::sprite::SpriteSystem;
 use crate::task::TaskSystem;
 
+const MAX_PAL_FRAME_DELTA: Duration = Duration::from_millis(100);
+
 #[derive(Clone, Debug, Default)]
 pub struct TraceConfig {
     pub script: bool,
@@ -21,6 +23,7 @@ pub struct TraceConfig {
     pub sprites: bool,
     pub assets: bool,
     pub render: bool,
+    pub buttons: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -56,6 +59,7 @@ pub struct Engine {
     frame_clock: FrameClock,
     last_runtime_status: RuntimeStatus,
     input: PalInputState,
+    window_physical_size: (u32, u32),
     pal_debug: bool,
 }
 
@@ -64,7 +68,7 @@ impl Engine {
         let (startup_config, resource_manager, core_assets, runtime, last_runtime_status) =
             match &config.game_root {
                 Some(root) => {
-                    let startup_config = EngineStartupConfig::load(root)?;
+                    let startup_config = EngineStartupConfig::load(root, config.nls)?;
                     let mut resource_manager = ResourceManager::bootstrap(root, config.nls)?;
                     resource_manager.preload_pacs()?;
                     let core_assets = CoreAssets::load(
@@ -89,8 +93,16 @@ impl Engine {
                         core_assets.script_entry_pc,
                         config.script_runtime.clone(),
                     );
+                    if let Some(system_ini) = startup_config.system_ini.clone() {
+                        runtime.set_system_ini(system_ini);
+                    }
                     // Initialise the writable Mem.dat shadow used by MemDatDirect writes.
                     runtime.load_mem_dat(&core_assets.mem_dat.bytes);
+                    let (window_width, window_height) = startup_config.window_size(
+                        FrameScene::PAL_DEFAULT_WIDTH,
+                        FrameScene::PAL_DEFAULT_HEIGHT,
+                    );
+                    runtime.set_window_size(window_width, window_height);
                     let status = runtime.status().clone();
                     (
                         Some(startup_config),
@@ -107,6 +119,19 @@ impl Engine {
         let sprites = SpriteSystem::new();
         let task_system = TaskSystem::new();
 
+        let fallback_size = startup_config.as_ref().map_or(
+            (
+                FrameScene::PAL_DEFAULT_WIDTH,
+                FrameScene::PAL_DEFAULT_HEIGHT,
+            ),
+            |config| {
+                config.window_size(
+                    FrameScene::PAL_DEFAULT_WIDTH,
+                    FrameScene::PAL_DEFAULT_HEIGHT,
+                )
+            },
+        );
+
         Ok(Self {
             config,
             startup_config,
@@ -119,6 +144,7 @@ impl Engine {
             frame_clock: FrameClock::new(),
             last_runtime_status,
             input: PalInputState::new(),
+            window_physical_size: fallback_size,
             pal_debug: pal_debug_enabled(),
         })
     }
@@ -197,15 +223,21 @@ impl Engine {
     }
 
     pub fn window_size_from_config(&self, fallback_width: u32, fallback_height: u32) -> (u32, u32) {
+        let (default_width, default_height) = self
+            .startup_config
+            .as_ref()
+            .map_or((fallback_width, fallback_height), |config| {
+                config.logical_size(fallback_width, fallback_height)
+            });
         let width = self
             .startup_config
             .as_ref()
-            .map_or(fallback_width, |config| config.window_width(fallback_width));
+            .map_or(default_width, |config| config.window_width(default_width));
         let height = self
             .startup_config
             .as_ref()
-            .map_or(fallback_height, |config| {
-                config.window_height(fallback_height)
+            .map_or(default_height, |config| {
+                config.window_height(default_height)
             });
         (width.max(640), height.max(480))
     }
@@ -220,24 +252,17 @@ impl Engine {
             .as_ref()
             .and_then(|runtime| runtime.parsed_system_ini())
         else {
-            return self.window_size_from_config(fallback_width, fallback_height);
+            return self
+                .startup_config
+                .as_ref()
+                .map_or((fallback_width.max(1), fallback_height.max(1)), |config| {
+                    config.logical_size(fallback_width, fallback_height)
+                });
         };
-        let width = system_ini
-            .get("graphics")
-            .and_then(|section| section.get("def_cg_width"))
-            .and_then(|value| value.as_int())
-            .and_then(|value| u32::try_from(value).ok())
-            .unwrap_or(fallback_width);
-        let height = system_ini
-            .get("graphics")
-            .and_then(|section| section.get("def_cg_height"))
-            .and_then(|value| value.as_int())
-            .and_then(|value| u32::try_from(value).ok())
-            .unwrap_or(fallback_height);
-        (width.max(1), height.max(1))
+        ini_graphics_size(Some(system_ini), fallback_width, fallback_height)
     }
 
-    /// Clear per-frame transient input state. Must be called from app before new events arrive.
+    /// Clear per-frame transient input state after the current frame has consumed it.
     pub fn input_begin_frame(&mut self) {
         self.input.begin_frame();
     }
@@ -248,14 +273,35 @@ impl Engine {
                 self.input.handle_input_event(input_event);
             }
             PalEvent::CloseRequested => {}
-            PalEvent::Resized { .. } => {}
+            PalEvent::Resized { width, height } => {
+                self.window_physical_size = (width.max(1), height.max(1));
+            }
             PalEvent::ScaleFactorChanged { .. } => {}
             PalEvent::RedrawRequested => {}
         }
     }
 
     pub fn update(&mut self) -> anyhow::Result<EngineFrame> {
-        let timing = self.frame_clock.tick();
+        let timing = self.frame_clock.tick_capped(MAX_PAL_FRAME_DELTA);
+        self.update_with_timing(timing)
+    }
+
+    pub fn update_with_delta(&mut self, delta: Duration) -> anyhow::Result<EngineFrame> {
+        let timing = self.frame_clock.tick_fixed(delta);
+        self.update_with_timing(timing)
+    }
+
+    fn update_with_timing(&mut self, timing: FrameTiming) -> anyhow::Result<EngineFrame> {
+        let (logical_width, logical_height) = self.logical_size_from_config(
+            FrameScene::PAL_DEFAULT_WIDTH,
+            FrameScene::PAL_DEFAULT_HEIGHT,
+        );
+        self.input.set_coordinate_space(
+            self.window_physical_size.0,
+            self.window_physical_size.1,
+            logical_width,
+            logical_height,
+        );
 
         // Update PAL cached time used by all task timing (animation delays, wait timeouts).
         self.task_system
@@ -263,13 +309,30 @@ impl Engine {
 
         // Process all tasks: animations update sprite source_rect, wait tasks check input.
         self.task_system.process(&mut self.sprites, &self.input);
-        self.sprites
-            .advance_transitions(timing.delta.as_millis().min(u32::MAX as u128) as u32);
+        let delta_ms = timing.delta.as_millis().min(u32::MAX as u128) as u32;
+        self.sprites.advance_motion_entries(delta_ms);
+        self.sprites.advance_transitions(delta_ms);
         if let Some(runtime) = self.runtime.as_mut() {
-            runtime.advance_msprites(
-                &mut self.sprites,
-                timing.delta.as_millis().min(u32::MAX as u128) as u32,
-            );
+            runtime.set_pal_time(self.task_system.pal_time_ms);
+            runtime.advance_msprites(&mut self.sprites, delta_ms);
+            if let Some(core_assets) = self.core_assets.as_ref() {
+                let nls = self
+                    .resource_manager
+                    .as_ref()
+                    .map(|manager| manager.nls())
+                    .unwrap_or(Nls::ShiftJis);
+                runtime.sync_text_sprite(
+                    core_assets,
+                    nls,
+                    self.resource_manager.as_mut(),
+                    &mut self.sprites,
+                );
+            }
+            runtime.update_button_input_state(&mut self.sprites, &self.input);
+            if self.config.trace.buttons {
+                let (mx, my) = self.input.mouse_position();
+                runtime.dump_button_states(&self.sprites, timing.frame_index, mx, my);
+            }
         }
 
         // Check if the script runtime was waiting on a task that just completed.
@@ -295,6 +358,7 @@ impl Engine {
                     Some(&mut self.sprites),
                     Some(&mut self.task_system),
                     Some(&mut self.audio),
+                    Some(&self.input),
                     &self.config.script_runtime,
                 ) {
                     Ok(tick) => Some(tick),
@@ -311,18 +375,36 @@ impl Engine {
         // Process any wait request emitted by the VM this tick.
         if let Some(tick) = runtime_tick.as_ref() {
             if let Some(wait_req) = &tick.wait_request {
+                // The native PAL loop can observe the same input edge that caused
+                // script execution to reach wait_click().  Creating a task after
+                // task_system.process() without checking the current frame drops
+                // that edge, making ADV text/buttons require an extra click.
+                let input_satisfied_click_wait =
+                    matches!(wait_req, WaitRequest::Click | WaitRequest::ClickOrTime(_))
+                        && self.input.any_push();
                 let handle = match wait_req {
+                    WaitRequest::Click | WaitRequest::ClickOrTime(_)
+                        if input_satisfied_click_wait =>
+                    {
+                        None
+                    }
                     WaitRequest::Frame(n) => self.task_system.create_wait_frame(*n),
                     WaitRequest::Time(ms) => self.task_system.create_wait_time(*ms),
                     WaitRequest::Click => self.task_system.create_wait_click(),
+                    WaitRequest::ClickOrTime(ms) => self.task_system.create_wait_click_or_time(*ms),
                 };
-                match handle {
-                    Some(h) => {
+                match (handle, input_satisfied_click_wait) {
+                    (Some(h), _) => {
                         if let Some(runtime) = self.runtime.as_mut() {
                             runtime.set_wait_handle(h);
                         }
                     }
-                    None => {
+                    (None, true) => {
+                        if let Some(runtime) = self.runtime.as_mut() {
+                            runtime.resolve_pending_wait();
+                        }
+                    }
+                    (None, false) => {
                         // Pool full: unblock VM immediately rather than hanging forever.
                         log::warn!(
                             "task pool full; wait request cannot be created, VM will continue"
@@ -342,7 +424,7 @@ impl Engine {
 
         self.audio.update();
 
-        let scene = self.compose_scene(timing.elapsed);
+        let scene = self.compose_scene(timing.elapsed, logical_width, logical_height);
 
         if self.pal_debug {
             let frame_events = runtime_tick
@@ -423,11 +505,12 @@ impl Engine {
         })
     }
 
-    fn compose_scene(&self, elapsed: Duration) -> FrameScene {
-        let (logical_width, logical_height) = self.logical_size_from_config(
-            FrameScene::PAL_DEFAULT_WIDTH,
-            FrameScene::PAL_DEFAULT_HEIGHT,
-        );
+    fn compose_scene(
+        &self,
+        elapsed: Duration,
+        logical_width: u32,
+        logical_height: u32,
+    ) -> FrameScene {
         let mut scene = FrameScene::from_runtime_status(&self.last_runtime_status, elapsed)
             .with_logical_size(logical_width, logical_height);
         for texture in self.sprites.textures() {
@@ -482,11 +565,29 @@ impl FrameClock {
         }
     }
 
-    fn tick(&mut self) -> FrameTiming {
+    fn tick_capped(&mut self, max_delta: Duration) -> FrameTiming {
         let now = Instant::now();
-        let delta = now.saturating_duration_since(self.previous);
-        let elapsed = now.saturating_duration_since(self.start);
+        let delta = now.saturating_duration_since(self.previous).min(max_delta);
+        let elapsed = self
+            .previous
+            .saturating_duration_since(self.start)
+            .saturating_add(delta);
         self.previous = now;
+        self.frame_index += 1;
+        FrameTiming {
+            frame_index: self.frame_index,
+            delta,
+            elapsed,
+        }
+    }
+
+    fn tick_fixed(&mut self, delta: Duration) -> FrameTiming {
+        let delta = delta.min(MAX_PAL_FRAME_DELTA);
+        let elapsed = self
+            .previous
+            .saturating_duration_since(self.start)
+            .saturating_add(delta);
+        self.previous = self.start + elapsed;
         self.frame_index += 1;
         FrameTiming {
             frame_index: self.frame_index,

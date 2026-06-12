@@ -1948,7 +1948,7 @@ pub fn ext_opcode(category: u16, index: u16) -> Option<ExtOpcode> {
         (3, 44) => Some(ExtOpcode {
             category: 3,
             index: 44,
-            name: None,
+            name: Some("sp_wait_draw"),
         }),
         (3, 45) => Some(ExtOpcode {
             category: 3,

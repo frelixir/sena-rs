@@ -1,6 +1,6 @@
 use pal_script::{
-    disassemble_script, format_script_header, DisassembleOptions, Instruction, PointTable,
-    ScriptImage,
+    disassemble_script, format_annotated_script, format_cfg, format_script_header, AnnotateOptions,
+    DisassembleOptions, Instruction, PointTable, ScriptImage,
 };
 
 fn push_u32(buf: &mut Vec<u8>, value: u32) {
@@ -84,6 +84,73 @@ fn disassembles_jump_with_point_target() {
     }
     assert_eq!(
         instructions[0].to_string(),
-        "0000000C: jmp_point point[1] -> 0x0000002C ; word=0x00010009"
+        "0000000C: jmp_point point_operand(imm(1)) point[1] -> 0x0000002C ; word=0x00010009"
     );
+}
+
+#[test]
+fn disassembles_dynamic_jump_operand_without_static_target() {
+    let mut script = Vec::new();
+    script.extend_from_slice(b"Sv20");
+    push_u32(&mut script, 0);
+    push_u32(&mut script, 0x0000_000C);
+    push_u32(&mut script, 0x0001_0009);
+    push_u32(&mut script, 0x4000_0007);
+
+    let parsed = ScriptImage::parse(&script).unwrap();
+    let instructions =
+        disassemble_script(&parsed, DisassembleOptions::new(parsed.entry_pc() as usize)).unwrap();
+
+    assert_eq!(
+        instructions[0].to_string(),
+        "0000000C: jmp_point point_operand(var[7]) ; word=0x00010009"
+    );
+}
+
+#[test]
+fn annotated_output_prints_point_labels_and_flow() {
+    let mut script = Vec::new();
+    script.extend_from_slice(b"Sv20");
+    push_u32(&mut script, 0);
+    push_u32(&mut script, 0x0000_000C);
+    push_u32(&mut script, 0x0001_000A);
+    push_u32(&mut script, 1);
+    push_u32(&mut script, 0x4000_0001);
+    push_u32(&mut script, 0x0001_0015);
+    push_u32(&mut script, 0x0001_0018);
+
+    let mut point_bytes = Vec::new();
+    push_u32(&mut point_bytes, 0x0000_0010);
+    let points = PointTable::parse(&point_bytes).unwrap();
+    let parsed = ScriptImage::parse(&script).unwrap();
+    let mut options = DisassembleOptions::new(parsed.entry_pc() as usize);
+    options.point_table = Some(&points);
+
+    let output = format_annotated_script(&parsed, options, AnnotateOptions::default()).unwrap();
+    assert!(output.contains("point_1:"));
+    assert!(output.contains("BranchFalse->point_1 point[1]"));
+    assert!(output.contains("BranchTrue->loc_00000018"));
+}
+
+#[test]
+fn cfg_output_lists_decoded_edges() {
+    let mut script = Vec::new();
+    script.extend_from_slice(b"Sv20");
+    push_u32(&mut script, 0);
+    push_u32(&mut script, 0x0000_000C);
+    push_u32(&mut script, 0x0001_000B);
+    push_u32(&mut script, 1);
+    push_u32(&mut script, 0x0001_0016);
+    push_u32(&mut script, 0x0001_0018);
+
+    let mut point_bytes = Vec::new();
+    push_u32(&mut point_bytes, 0x0000_000C);
+    let points = PointTable::parse(&point_bytes).unwrap();
+    let parsed = ScriptImage::parse(&script).unwrap();
+    let mut options = DisassembleOptions::new(parsed.entry_pc() as usize);
+    options.point_table = Some(&points);
+
+    let output = format_cfg(&parsed, options).unwrap();
+    assert!(output.contains("0x0000000C -> point_1 [Call point[1]]"));
+    assert!(output.contains("0x0000000C -> loc_00000014 [Fallthrough]"));
 }

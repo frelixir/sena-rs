@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 use pal_script::{
-    disassemble_script, format_script_header, parse_usize_number, DisassembleOptions, PointTable,
-    ScriptImage,
+    disassemble_script, format_annotated_script, format_cfg, format_script_header,
+    parse_usize_number, AnnotateOptions, DisassembleOptions, PointTable, ScriptImage,
 };
 
 #[derive(Debug, Parser)]
@@ -26,6 +26,14 @@ struct Cli {
 
     #[arg(long)]
     no_header: bool,
+
+    /// Print labels and control-flow comments around the linear disassembly.
+    #[arg(long)]
+    annotated: bool,
+
+    /// Print only decoded control-flow edges.
+    #[arg(long)]
+    cfg: bool,
 }
 
 fn main() -> Result<()> {
@@ -65,10 +73,23 @@ fn main() -> Result<()> {
         println!("{}", format_script_header(&script));
     }
 
-    for instruction in
-        disassemble_script(&script, options).context("failed to disassemble script")?
-    {
-        println!("{instruction}");
+    if cli.cfg {
+        print!(
+            "{}",
+            format_cfg(&script, options).context("failed to build script CFG")?
+        );
+    } else if cli.annotated {
+        print!(
+            "{}",
+            format_annotated_script(&script, options, AnnotateOptions::default())
+                .context("failed to annotate script")?
+        );
+    } else {
+        for instruction in
+            disassemble_script(&script, options).context("failed to disassemble script")?
+        {
+            println!("{instruction}");
+        }
     }
 
     Ok(())

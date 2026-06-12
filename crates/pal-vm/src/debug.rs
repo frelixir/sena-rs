@@ -108,6 +108,7 @@ pub fn collect_frame_dump(
                     WaitRequest::Frame(n) => format!("Frame({n})"),
                     WaitRequest::Time(ms) => format!("Time({ms})"),
                     WaitRequest::Click => "Click".to_owned(),
+                    WaitRequest::ClickOrTime(ms) => format!("ClickOrTime({ms})"),
                 };
                 format!("wait pc=0x{pc:08X} kind={k}")
             }

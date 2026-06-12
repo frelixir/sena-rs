@@ -12,6 +12,13 @@ pub const TASK_POOL_CAPACITY: usize = 512;
 /// PalWait and PalWaitTime use this flag.
 pub const BLOCKING_FLAG: u32 = 0x10000;
 
+fn debug_vm_wait_trace_enabled() -> bool {
+    std::env::var("DEBUG_VM")
+        .ok()
+        .as_deref()
+        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
+
 /// Handle to a task node. Encodes pool index in low 16 bits and generation counter
 /// in high 16 bits so stale handles to reused slots are detected.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
@@ -58,6 +65,8 @@ pub enum TaskKind {
     WaitTime { duration_ms: u32, start_ms: u32 },
     /// Input-push wait. Frees itself when any key or mouse button is pushed.
     WaitClick,
+    /// Input-push wait with a timeout. Mirrors wait_click(duration >= 0).
+    WaitClickOrTime { duration_ms: u32, start_ms: u32 },
     /// Generic PAL task node with modeled metadata but no Rust callback body yet.
     Raw,
     /// A task type not yet mapped to a Rust payload. Logs a warning each update and
@@ -259,7 +268,11 @@ impl TaskSystem {
         self.nodes[idx].kind = TaskKind::WaitFrame { remaining };
         self.nodes[idx].task_data = remaining.to_le_bytes().to_vec();
         self.insert_task(idx, BLOCKING_FLAG, None, "PalWait");
-        Some(TaskHandle::encode(idx, gen))
+        let handle = TaskHandle::encode(idx, gen);
+        if debug_vm_wait_trace_enabled() {
+            log::debug!("[trace-wait] create_wait_frame handle={handle:?} remaining={remaining}");
+        }
+        Some(handle)
     }
 
     /// Create a WaitTime blocking task. Uses the cached PAL clock as its start time.
@@ -276,7 +289,14 @@ impl TaskSystem {
         task_data.extend_from_slice(&self.pal_time_ms.to_le_bytes());
         self.nodes[idx].task_data = task_data;
         self.insert_task(idx, BLOCKING_FLAG, None, "PalWaitTime");
-        Some(TaskHandle::encode(idx, gen))
+        let handle = TaskHandle::encode(idx, gen);
+        if debug_vm_wait_trace_enabled() {
+            log::debug!(
+                "[trace-wait] create_wait_time handle={handle:?} duration_ms={duration_ms} start_ms={}",
+                self.pal_time_ms
+            );
+        }
+        Some(handle)
     }
 
     /// Create a WaitClick blocking task. Frees itself when any input push is detected.
@@ -287,7 +307,32 @@ impl TaskSystem {
         self.nodes[idx].kind = TaskKind::WaitClick;
         self.nodes[idx].task_data.clear();
         self.insert_task(idx, BLOCKING_FLAG, None, "PalWaitClick");
-        Some(TaskHandle::encode(idx, gen))
+        let handle = TaskHandle::encode(idx, gen);
+        log::debug!("[trace-wait] create_wait_click handle={handle:?}");
+        Some(handle)
+    }
+
+    /// Create the PAL wait_click(duration) task: input ends it early, otherwise timeout ends it.
+    /// Returns None if the pool is full.
+    pub fn create_wait_click_or_time(&mut self, duration_ms: u32) -> Option<TaskHandle> {
+        let idx = self.alloc_node()?;
+        let gen = self.nodes[idx].generation;
+        self.nodes[idx].kind = TaskKind::WaitClickOrTime {
+            duration_ms: duration_ms.max(1),
+            start_ms: self.pal_time_ms,
+        };
+        let mut task_data = Vec::with_capacity(8);
+        task_data.extend_from_slice(&duration_ms.max(1).to_le_bytes());
+        task_data.extend_from_slice(&self.pal_time_ms.to_le_bytes());
+        self.nodes[idx].task_data = task_data;
+        self.insert_task(idx, BLOCKING_FLAG, None, "PalWaitClickTime");
+        let handle = TaskHandle::encode(idx, gen);
+        log::debug!(
+            "[trace-wait] create_wait_click_or_time handle={handle:?} duration_ms={} start_ms={}",
+            duration_ms.max(1),
+            self.pal_time_ms
+        );
+        Some(handle)
     }
 
     /// Mark a task as pending-free. All children are also marked pending-free.
@@ -447,6 +492,24 @@ impl TaskSystem {
             }
             TaskKind::WaitClick => {
                 if input.any_push() {
+                    log::debug!(
+                        "[trace-wait] wait_click complete idx={idx} any_push=true pal_time_ms={pal_time_ms}"
+                    );
+                    TaskUpdateOutcome::FreeSelf
+                } else {
+                    TaskUpdateOutcome::Continue
+                }
+            }
+            TaskKind::WaitClickOrTime {
+                duration_ms,
+                start_ms,
+            } => {
+                let elapsed = pal_time_ms.wrapping_sub(*start_ms);
+                if input.any_push() || elapsed >= *duration_ms {
+                    log::debug!(
+                        "[trace-wait] wait_click_or_time complete idx={idx} any_push={} elapsed={elapsed} duration_ms={duration_ms}",
+                        input.any_push()
+                    );
                     TaskUpdateOutcome::FreeSelf
                 } else {
                     TaskUpdateOutcome::Continue

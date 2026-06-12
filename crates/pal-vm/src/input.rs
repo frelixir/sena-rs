@@ -87,8 +87,8 @@ fn winit_mouse_to_pal(button: MouseButton) -> u8 {
 /// PAL's input system keeps per-frame push/on/pull masks computed in sub_10246500.
 /// Winit events feed into this state; the frame boundary is marked by begin_frame().
 ///
-/// Mouse coordinates are raw window coordinates. Aspect-rectangle mapping is a
-/// separate concern (PalCursorSetPos / sub_10246C10) not yet implemented.
+/// Mouse coordinates are PAL logical coordinates. Winit feeds physical window
+/// coordinates, then the engine maps them through the current render scale.
 #[derive(Clone, Debug, Default)]
 pub struct PalInputState {
     // Keyboard three-state (bitmask over PalKey variants)
@@ -101,7 +101,7 @@ pub struct PalInputState {
     mouse_push: u8,
     mouse_pull: u8,
 
-    // Mouse position in window coordinates; -1 if outside active area (not yet implemented).
+    // Mouse position in PAL logical coordinates.
     mouse_x: i32,
     mouse_y: i32,
 
@@ -109,9 +109,19 @@ pub struct PalInputState {
     mouse_move_x: i32,
     mouse_move_y: i32,
 
-    // Running cursor position for delta computation (not cleared on begin_frame).
+    // Running cursor position in PAL logical coordinates for delta computation.
     cursor_prev_x: i32,
     cursor_prev_y: i32,
+
+    // Last raw physical cursor position from winit.
+    cursor_raw_x: f64,
+    cursor_raw_y: f64,
+
+    // Current physical-to-PAL coordinate transform.
+    window_width: u32,
+    window_height: u32,
+    logical_width: u32,
+    logical_height: u32,
 
     // Vertical wheel accumulator; cleared by begin_frame.
     wheel_delta: f32,
@@ -123,6 +133,26 @@ pub struct PalInputState {
 impl PalInputState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn set_coordinate_space(
+        &mut self,
+        window_width: u32,
+        window_height: u32,
+        logical_width: u32,
+        logical_height: u32,
+    ) {
+        self.window_width = window_width.max(1);
+        self.window_height = window_height.max(1);
+        self.logical_width = logical_width.max(1);
+        self.logical_height = logical_height.max(1);
+        if self.cursor_initialized {
+            let (x, y) = self.map_physical_to_logical(self.cursor_raw_x, self.cursor_raw_y);
+            self.mouse_x = x;
+            self.mouse_y = y;
+            self.cursor_prev_x = x;
+            self.cursor_prev_y = y;
+        }
     }
 
     /// Clear per-frame transient state: push, pull, move delta, wheel.
@@ -205,8 +235,9 @@ impl PalInputState {
 
     /// Process a cursor-moved event.
     pub fn handle_cursor_moved(&mut self, x: f64, y: f64) {
-        let new_x = x as i32;
-        let new_y = y as i32;
+        self.cursor_raw_x = x;
+        self.cursor_raw_y = y;
+        let (new_x, new_y) = self.map_physical_to_logical(x, y);
         if self.cursor_initialized {
             self.mouse_move_x += new_x - self.cursor_prev_x;
             self.mouse_move_y += new_y - self.cursor_prev_y;
@@ -216,6 +247,17 @@ impl PalInputState {
         self.mouse_x = new_x;
         self.mouse_y = new_y;
         self.cursor_initialized = true;
+    }
+
+    fn map_physical_to_logical(&self, x: f64, y: f64) -> (i32, i32) {
+        let window_width = self.window_width.max(1) as f64;
+        let window_height = self.window_height.max(1) as f64;
+        let logical_width = self.logical_width.max(1) as f64;
+        let logical_height = self.logical_height.max(1) as f64;
+        (
+            ((x * logical_width) / window_width).round() as i32,
+            ((y * logical_height) / window_height).round() as i32,
+        )
     }
 
     /// Process a mouse wheel event.
@@ -268,10 +310,10 @@ impl PalInputState {
         self.wheel_delta
     }
 
-    /// True if any key or mouse button was newly pushed this frame.
+    /// True if any key, mouse button, or positive mouse wheel input was pushed this frame.
     /// Used by WaitClick tasks.
     pub fn any_push(&self) -> bool {
-        self.key_push != 0 || self.mouse_push != 0
+        self.key_push != 0 || self.mouse_push != 0 || self.wheel_delta > 0.0
     }
 
     /// Raw keyboard push bitmask (for direct PAL API access).

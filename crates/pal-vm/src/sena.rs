@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use pal_asset::Nls;
-use pal_vm::{run_sena, AudioConfig, FrameScene, SenaConfig};
+use pal_vm::{run_sena, AudioConfig, DiagnosticClick, FrameScene, SenaConfig};
 
 #[derive(Debug, Parser)]
 #[command(name = "sena")]
@@ -49,11 +49,35 @@ struct Args {
     #[arg(long)]
     trace_render: bool,
 
+    /// Trace button state (group, index, name, rect, enabled, visible, hit) every frame.
+    #[arg(long)]
+    trace_buttons: bool,
+
     #[arg(long, default_value_t = 4096)]
     script_budget_per_frame: usize,
 
     #[arg(long)]
     no_audio: bool,
+
+    /// Run the engine without creating a window or GPU renderer.
+    #[arg(long, alias = "handless", alias = "gui-handless")]
+    headless: bool,
+
+    /// Number of frames to execute in --headless diagnostics.
+    #[arg(long, default_value_t = 120)]
+    diagnostic_frames: usize,
+
+    /// Real-time delay between --headless diagnostic frames.
+    #[arg(long, default_value_t = 16)]
+    diagnostic_frame_ms: u64,
+
+    /// Write the final --headless diagnostic frame to a PNG file.
+    #[arg(long)]
+    diagnostic_png: Option<PathBuf>,
+
+    /// Inject headless clicks as frame:x:y in PAL logical coordinates. Can be passed more than once.
+    #[arg(long, value_parser = parse_diagnostic_click)]
+    diagnostic_click: Vec<DiagnosticClick>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -72,10 +96,39 @@ fn main() -> anyhow::Result<()> {
         trace_sprites: args.trace_sprites,
         trace_assets: args.trace_assets,
         trace_render: args.trace_render,
+        trace_buttons: args.trace_buttons,
         script_budget_per_frame: args.script_budget_per_frame,
         audio: AudioConfig {
             enabled: !args.no_audio,
         },
+        headless: args.headless,
+        diagnostic_frames: args.diagnostic_frames,
+        diagnostic_frame_ms: args.diagnostic_frame_ms,
+        diagnostic_png: args.diagnostic_png,
+        diagnostic_clicks: args.diagnostic_click,
         ..SenaConfig::default()
     })
+}
+
+fn parse_diagnostic_click(raw: &str) -> Result<DiagnosticClick, String> {
+    let mut parts = raw.split(':');
+    let frame = parts
+        .next()
+        .ok_or_else(|| "missing frame".to_owned())?
+        .parse::<usize>()
+        .map_err(|err| format!("invalid frame: {err}"))?;
+    let x = parts
+        .next()
+        .ok_or_else(|| "missing x".to_owned())?
+        .parse::<i32>()
+        .map_err(|err| format!("invalid x: {err}"))?;
+    let y = parts
+        .next()
+        .ok_or_else(|| "missing y".to_owned())?
+        .parse::<i32>()
+        .map_err(|err| format!("invalid y: {err}"))?;
+    if parts.next().is_some() {
+        return Err("expected frame:x:y".to_owned());
+    }
+    Ok(DiagnosticClick { frame, x, y })
 }

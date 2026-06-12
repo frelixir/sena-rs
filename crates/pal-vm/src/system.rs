@@ -92,6 +92,9 @@ pub struct PalSystemState {
     window_mode: i32,
     window_change_enabled: i32,
     aspect_mode: i32,
+    aspect_position_enabled: i32,
+    hide_cursor_time: i32,
+    cursor_null: bool,
     touch_enabled: bool,
     touch_mode: i32,
     gesture_mode: i32,
@@ -112,15 +115,18 @@ impl Default for PalSystemState {
             window_mode: 0,
             window_change_enabled: 1,
             aspect_mode: 0,
+            aspect_position_enabled: 0,
+            hide_cursor_time: 0,
+            cursor_null: false,
             touch_enabled: false,
             touch_mode: 0,
             gesture_mode: 0,
             gestures: [PalGesture::default(); 5],
             window_pos: (0, 0),
-            window_size: (1920, 1080),
-            windowed_content_rect: PalRectI::new(0, 0, 1920, 1080),
-            fullscreen_content_rect: PalRectI::new(0, 0, 1920, 1080),
-            logical_size: (1920, 1080),
+            window_size: (1280, 720),
+            windowed_content_rect: PalRectI::new(0, 0, 1280, 720),
+            fullscreen_content_rect: PalRectI::new(0, 0, 1280, 720),
+            logical_size: (1280, 720),
             system_paths: PalSystemPaths::default(),
             window_requests: Vec::new(),
         }
@@ -170,6 +176,33 @@ impl PalSystemState {
         self.window_requests
             .push(PalWindowRequest::ChangeAspect { mode });
         1
+    }
+
+    pub fn set_aspect_position_enabled(&mut self, enabled: i32) -> i32 {
+        self.aspect_position_enabled = enabled;
+        1
+    }
+
+    pub fn aspect_position_enabled(&self) -> i32 {
+        self.aspect_position_enabled
+    }
+
+    pub fn set_hide_cursor_time(&mut self, time: i32) -> i32 {
+        self.hide_cursor_time = time.max(0);
+        1
+    }
+
+    pub fn hide_cursor_time(&self) -> i32 {
+        self.hide_cursor_time
+    }
+
+    pub fn set_cursor_null(&mut self, enabled: bool) -> i32 {
+        self.cursor_null = enabled;
+        1
+    }
+
+    pub fn cursor_null(&self) -> bool {
+        self.cursor_null
     }
 
     pub fn touch_enabled(&self) -> bool {
@@ -258,6 +291,10 @@ impl PalSystemState {
 
     pub fn set_logical_size(&mut self, width: i32, height: i32) {
         self.logical_size = (width.max(1), height.max(1));
+    }
+
+    pub fn logical_size(&self) -> (i32, i32) {
+        self.logical_size
     }
 
     pub fn set_fullscreen_content_rect(&mut self, rect: PalRectI) {

@@ -1,12 +1,16 @@
 pub mod disasm;
 pub mod error;
+pub mod extsig;
 pub mod opcodes;
 pub mod operand;
 pub mod point;
 pub mod script;
 pub mod util;
 
-pub use disasm::{disassemble_script, Argument, DisassembleOptions, Instruction};
+pub use disasm::{
+    disassemble_script, format_annotated_script, format_cfg, AnnotateOptions, Argument,
+    DisassembleOptions, FlowEdge, FlowEdgeKind, Instruction,
+};
 pub use error::{PalError, Result};
 pub use operand::{Operand, OperandKind};
 pub use point::PointTable;

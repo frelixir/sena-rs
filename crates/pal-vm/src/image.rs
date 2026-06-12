@@ -13,7 +13,60 @@ pub fn decode_image(bytes: &[u8]) -> anyhow::Result<DecodedImage> {
     if bytes.len() >= 0x20 && bytes.get(0..3) == Some(b"GE ") {
         return decode_pgd_ge(bytes);
     }
+    if bytes.len() >= 0x38 && bytes.get(0..4) == Some(b"PGD3") {
+        return decode_pgd3(bytes);
+    }
     anyhow::bail!("unsupported image signature");
+}
+
+fn decode_pgd3(bytes: &[u8]) -> anyhow::Result<DecodedImage> {
+    let offset_x = read_u16(bytes, 0x04)? as i16 as i32;
+    let offset_y = read_u16(bytes, 0x06)? as i16 as i32;
+    let width = read_u16(bytes, 0x08)? as usize;
+    let height = read_u16(bytes, 0x0A)? as usize;
+    let bpp = read_u16(bytes, 0x0C)?;
+    let unpacked_size = read_u32(bytes, 0x30)? as usize;
+    let packed_size = read_u32(bytes, 0x34)? as usize;
+    let data_end = 0x38usize
+        .checked_add(packed_size)
+        .ok_or_else(|| anyhow::anyhow!("PGD3 packed stream size overflow"))?;
+    if data_end > bytes.len() {
+        anyhow::bail!(
+            "PGD3 packed stream out of bounds: end {data_end}, len {}",
+            bytes.len()
+        );
+    }
+
+    let mut input = Cursor::new(&bytes[..data_end], 0x38);
+    let unpacked = unpack_ge_pre(&mut input, unpacked_size)?;
+    let pixel_size = match bpp {
+        24 => 3,
+        32 => 4,
+        _ => anyhow::bail!("unsupported PGD3 bpp {bpp}"),
+    };
+    let bgx = post_process_pal(&unpacked, 0, width, height, pixel_size)?;
+    let rgba = bgx_to_rgba(&bgx, pixel_size)?;
+    let expected = width
+        .checked_mul(height)
+        .and_then(|px| px.checked_mul(4))
+        .ok_or_else(|| anyhow::anyhow!("PGD3 dimensions overflow"))?;
+    if rgba.len() != expected {
+        anyhow::bail!(
+            "PGD3 decoded size mismatch: got {}, expected {}",
+            rgba.len(),
+            expected
+        );
+    }
+
+    Ok(DecodedImage {
+        width: width as u32,
+        height: height as u32,
+        cell_width: width.max(1) as u32,
+        cell_height: height.max(1) as u32,
+        offset_x,
+        offset_y,
+        rgba,
+    })
 }
 
 fn decode_pgd_ge(bytes: &[u8]) -> anyhow::Result<DecodedImage> {

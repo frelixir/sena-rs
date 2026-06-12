@@ -1,5 +1,6 @@
 use pal_asset::Nls;
-use pal_vm::{parse_ini_nls, IniValue};
+use pal_vm::{parse_ini_nls, EngineStartupConfig, FrameScene, IniValue};
+use std::path::PathBuf;
 
 #[test]
 fn parse_simple_ini_ascii() {
@@ -75,5 +76,24 @@ fn parse_sjis_ini_does_not_use_lossy() {
     assert_eq!(
         result.get("section").unwrap().get("k"),
         Some(&IniValue::Int(1))
+    );
+}
+
+#[test]
+fn startup_config_reads_system_ini_logical_size_before_vm_runs() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("testcase");
+    let config = EngineStartupConfig::load(&root, Nls::ShiftJis).expect("startup config");
+    assert!(config.system_ini.is_some(), "SYSTEM.INI must be loaded");
+    assert_eq!(
+        config.logical_size(
+            FrameScene::PAL_DEFAULT_WIDTH,
+            FrameScene::PAL_DEFAULT_HEIGHT
+        ),
+        (1280, 720)
     );
 }

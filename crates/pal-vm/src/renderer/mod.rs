@@ -387,16 +387,11 @@ fn draw_textured_rect(
     coord_scale: [f32; 2],
     sprite: &SpriteDraw,
 ) {
-    let scale = if sprite.scale.is_finite() {
-        sprite.scale.abs().max(f32::EPSILON)
-    } else {
-        1.0
-    };
     let dst_rect = RectF::new(
         sprite.dst.x * coord_scale[0],
         sprite.dst.y * coord_scale[1],
-        sprite.dst.w * scale * coord_scale[0],
-        sprite.dst.h * scale * coord_scale[1],
+        sprite.dst.w * coord_scale[0],
+        sprite.dst.h * coord_scale[1],
     );
     let x0 = dst_rect.x.floor().max(0.0) as i32;
     let y0 = dst_rect.y.floor().max(0.0) as i32;

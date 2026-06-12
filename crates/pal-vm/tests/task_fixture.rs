@@ -383,6 +383,51 @@ fn wait_click_frees_on_any_push() {
     );
 }
 
+#[test]
+fn wait_click_or_time_frees_on_input_before_timeout() {
+    let mut tasks = TaskSystem::new();
+    let mut sprites = SpriteSystem::new();
+    let mut input = PalInputState::new();
+
+    tasks.set_pal_time(100);
+    let h = tasks.create_wait_click_or_time(250).unwrap();
+
+    tasks.set_pal_time(200);
+    tasks.process(&mut sprites, &input);
+    assert!(tasks.is_alive(h));
+
+    input.begin_frame();
+    input.handle_mouse_button_event(pal_vm::event::MouseButton::Left, true);
+    tasks.process(&mut sprites, &input);
+    assert!(tasks.is_alive(h));
+
+    input.begin_frame();
+    tasks.process(&mut sprites, &input);
+    assert!(!tasks.is_alive(h));
+}
+
+#[test]
+fn wait_click_or_time_frees_on_timeout_without_input() {
+    let mut tasks = TaskSystem::new();
+    let mut sprites = SpriteSystem::new();
+    let input = PalInputState::new();
+
+    tasks.set_pal_time(100);
+    let h = tasks.create_wait_click_or_time(250).unwrap();
+
+    tasks.set_pal_time(349);
+    tasks.process(&mut sprites, &input);
+    assert!(tasks.is_alive(h));
+
+    tasks.set_pal_time(350);
+    tasks.process(&mut sprites, &input);
+    assert!(tasks.is_alive(h));
+
+    tasks.set_pal_time(351);
+    tasks.process(&mut sprites, &input);
+    assert!(!tasks.is_alive(h));
+}
+
 // ---- Animation via TaskSystem ----
 
 #[test]
