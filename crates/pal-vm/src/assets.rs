@@ -88,12 +88,13 @@ pub struct GraphicIndex {
     pub buckets: Vec<GraphicBucket>,
     pub data_offset: usize,
     pub entries_by_key: BTreeMap<[u8; 32], GraphicEntry>,
+    pub records: Vec<GraphicRecord>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GraphicBucket {
-    pub first_record_index: u32,
-    pub record_count: u32,
+    pub record_count: u16,
+    pub record_offset: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -104,11 +105,35 @@ pub struct GraphicEntry {
     pub bucket: u8,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GraphicRecord {
+    pub key: [u8; 32],
+    pub replacement_name: [u8; 64],
+    pub animation_name: [u8; 64],
+    pub flags: u32,
+    pub priority_lane: i32,
+    pub offset_x: i32,
+    pub offset_y: i32,
+    pub scale_percent: i32,
+    pub alpha: i32,
+    pub bucket: u8,
+}
+
+impl GraphicRecord {
+    pub fn replacement_resource(&self) -> Option<String> {
+        graphic_c_string(&self.replacement_name)
+    }
+
+    pub fn animation_resource(&self) -> Option<String> {
+        graphic_c_string(&self.animation_name)
+    }
+}
+
 impl GraphicIndex {
     pub const BUCKET_COUNT: usize = 255;
     pub const BUCKET_TABLE_SIZE: usize = 0x7F8;
     pub const RECORD_BASE_AFTER_DOLLAR_HEADER: usize = 0x10 + Self::BUCKET_TABLE_SIZE;
-    pub const RECORD_SIZE: usize = 40;
+    pub const RECORD_SIZE: usize = 0x84;
 
     pub fn parse(bytes: &[u8]) -> anyhow::Result<Self> {
         if bytes.len() < 0x10 + Self::BUCKET_TABLE_SIZE {
@@ -124,21 +149,21 @@ impl GraphicIndex {
         for bucket in 0..Self::BUCKET_COUNT {
             let offset = bucket_base + bucket * 8;
             buckets.push(GraphicBucket {
-                first_record_index: read_u32(bytes, offset)?,
-                record_count: read_u32(bytes, offset + 4)?,
+                record_count: read_u16(bytes, offset)?,
+                record_offset: read_u32(bytes, offset + 4)?,
             });
         }
 
         let mut entries_by_key = BTreeMap::new();
+        let mut records = Vec::new();
         for (bucket, info) in buckets.iter().enumerate() {
-            let first = info.first_record_index as usize;
             let count = info.record_count as usize;
-            let last = first
-                .checked_add(count)
-                .ok_or_else(|| anyhow::anyhow!("graphic.dat bucket range overflows"))?;
-            for record_index in first..last {
+            let bucket_data_offset = Self::RECORD_BASE_AFTER_DOLLAR_HEADER
+                .checked_add(info.record_offset as usize)
+                .ok_or_else(|| anyhow::anyhow!("graphic.dat bucket data offset overflows"))?;
+            for record_index in 0..count {
                 let offset =
-                    Self::RECORD_BASE_AFTER_DOLLAR_HEADER
+                    bucket_data_offset
                         .checked_add(record_index.checked_mul(Self::RECORD_SIZE).ok_or_else(
                             || anyhow::anyhow!("graphic.dat record offset overflows"),
                         )?)
@@ -152,14 +177,44 @@ impl GraphicIndex {
                 }
                 let mut key = [0u8; 32];
                 key.copy_from_slice(&bytes[offset..offset + 32]);
-                let data_size = read_u32(bytes, offset + 32)?;
-                let data_offset = read_u32(bytes, offset + 36)?;
+                normalize_graphic_key(&mut key);
+                let mut replacement_name = [0u8; 64];
+                replacement_name[..0x1C].copy_from_slice(&bytes[offset + 0x24..offset + 0x40]);
+                normalize_graphic_name(&mut replacement_name);
+                let mut animation_name = [0u8; 64];
+                animation_name.copy_from_slice(&bytes[offset + 0x44..offset + 0x84]);
+                normalize_graphic_name(&mut animation_name);
+                let flags = read_u32(bytes, offset + 0x20)?;
+                // Game.exe `sub_448710` copies a 0xE4-byte in-memory graphic
+                // record, but the encrypted `graphic.dat` resource stores the
+                // compact 0x84-byte bucket record decoded here.  Offsets such
+                // as +0xC4/+0xD4 belong to the expanded runtime structure; when
+                // read from this compact file they cross into the next record
+                // and inject bogus placement/scale metadata.  Keep those lanes
+                // neutral until the loader expansion is represented explicitly.
+                let priority_lane = 0;
+                let offset_x = 0;
+                let offset_y = 0;
+                let scale_percent = 0;
+                let alpha = 0;
+                records.push(GraphicRecord {
+                    key,
+                    replacement_name,
+                    animation_name,
+                    flags,
+                    priority_lane,
+                    offset_x,
+                    offset_y,
+                    scale_percent,
+                    alpha,
+                    bucket: bucket as u8,
+                });
                 entries_by_key.insert(
                     key,
                     GraphicEntry {
                         key,
-                        data_size,
-                        data_offset,
+                        data_size: Self::RECORD_SIZE as u32,
+                        data_offset: info.record_offset + (record_index * Self::RECORD_SIZE) as u32,
                         bucket: bucket as u8,
                     },
                 );
@@ -170,6 +225,7 @@ impl GraphicIndex {
             buckets,
             data_offset: Self::RECORD_BASE_AFTER_DOLLAR_HEADER,
             entries_by_key,
+            records,
         })
     }
 
@@ -180,6 +236,21 @@ impl GraphicIndex {
     pub fn is_empty(&self) -> bool {
         self.entries_by_key.is_empty()
     }
+
+    pub fn lookup(&self, name: &str) -> Option<&GraphicRecord> {
+        let key = make_graphic_key(name);
+        self.records.iter().find(|record| record.key == key)
+    }
+}
+
+fn read_u16(bytes: &[u8], offset: usize) -> anyhow::Result<u16> {
+    let end = offset
+        .checked_add(2)
+        .ok_or_else(|| anyhow::anyhow!("read offset overflows"))?;
+    if end > bytes.len() {
+        return Err(anyhow::anyhow!("read out of range at 0x{:X}", offset));
+    }
+    Ok(u16::from_le_bytes([bytes[offset], bytes[offset + 1]]))
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> anyhow::Result<u32> {
@@ -195,4 +266,59 @@ fn read_u32(bytes: &[u8], offset: usize) -> anyhow::Result<u32> {
         bytes[offset + 2],
         bytes[offset + 3],
     ]))
+}
+
+fn make_graphic_key(name: &str) -> [u8; 32] {
+    let mut key = [0u8; 32];
+    let leaf = name.rsplit(['/', '\\']).next().unwrap_or(name);
+    let stem = leaf.split('.').next().unwrap_or(leaf);
+    for (dst, src) in key.iter_mut().zip(
+        stem.as_bytes()
+            .iter()
+            .copied()
+            .map(|b| b.to_ascii_uppercase()),
+    ) {
+        *dst = src;
+    }
+    key
+}
+
+fn normalize_graphic_key(key: &mut [u8; 32]) {
+    if key[1] == 0 && key[3] == 0 {
+        let mut compact = [0u8; 32];
+        for i in 0..20.min(key.len() / 2) {
+            compact[i] = key[i * 2];
+        }
+        *key = compact;
+    }
+    for byte in key {
+        if *byte == 0xCC {
+            *byte = 0;
+        } else {
+            *byte = byte.to_ascii_uppercase();
+        }
+    }
+}
+
+fn normalize_graphic_name(name: &mut [u8; 64]) {
+    if name[1] == 0 && name[3] == 0 {
+        let mut compact = [0u8; 64];
+        for i in 0..32.min(name.len() / 2) {
+            compact[i] = name[i * 2];
+        }
+        *name = compact;
+    }
+    for byte in name {
+        if *byte == 0xCC {
+            *byte = 0;
+        }
+    }
+}
+
+fn graphic_c_string(bytes: &[u8]) -> Option<String> {
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    if end == 0 {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&bytes[..end]).to_string())
 }

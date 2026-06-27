@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::fs;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use crate::error::{AssetError, Result};
@@ -35,37 +36,63 @@ impl PacEntry {
 #[derive(Debug)]
 pub struct PacArchive {
     path: PathBuf,
-    bytes: Vec<u8>,
+    storage: PacStorage,
     buckets: Vec<PacBucket>,
     entries: Vec<PacEntry>,
     entry_by_key: HashMap<PacKey, usize>,
 }
 
+#[derive(Debug)]
+enum PacStorage {
+    File,
+    Memory(Vec<u8>),
+}
+
 impl PacArchive {
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let bytes = fs::read(&path).map_err(|e| AssetError::io(&path, e))?;
-        Self::from_bytes(path, bytes)
+        let mut file = File::open(&path).map_err(|e| AssetError::io(&path, e))?;
+        let len = file.metadata().map_err(|e| AssetError::io(&path, e))?.len() as usize;
+        if len < PAC_RECORD_BASE {
+            return Err(AssetError::PacTooSmall { path, len });
+        }
+
+        let mut header = vec![0u8; PAC_RECORD_BASE];
+        file.read_exact(&mut header)
+            .map_err(|e| AssetError::io(&path, e))?;
+        let buckets = parse_buckets(&path, &header)?;
+        let record_table_end = record_table_end(&path, len, &buckets)?;
+        let record_bytes_len = record_table_end.saturating_sub(PAC_RECORD_BASE);
+        let mut record_bytes = vec![0u8; record_bytes_len];
+        if record_bytes_len > 0 {
+            file.seek(SeekFrom::Start(PAC_RECORD_BASE as u64))
+                .map_err(|e| AssetError::io(&path, e))?;
+            file.read_exact(&mut record_bytes)
+                .map_err(|e| AssetError::io(&path, e))?;
+        }
+        Self::from_parts(path, len, buckets, &record_bytes, PacStorage::File)
     }
 
     pub fn from_bytes(path: PathBuf, bytes: Vec<u8>) -> Result<Self> {
-        if bytes.len() < PAC_RECORD_BASE {
-            return Err(AssetError::PacTooSmall {
-                path,
-                len: bytes.len(),
-            });
+        let len = bytes.len();
+        if len < PAC_RECORD_BASE {
+            return Err(AssetError::PacTooSmall { path, len });
         }
 
-        let mut buckets = Vec::with_capacity(PAC_BUCKET_COUNT);
-        for bucket_index in 0..PAC_BUCKET_COUNT {
-            let off = PAC_BUCKET_TABLE_OFFSET + bucket_index * 8;
-            let first_record_index = read_u32_at(&bytes, off);
-            let record_count = read_u32_at(&bytes, off + 4);
-            buckets.push(PacBucket {
-                first_record_index,
-                record_count,
-            });
-        }
+        let buckets = parse_buckets(&path, &bytes[..PAC_RECORD_BASE])?;
+        let record_table_end = record_table_end(&path, len, &buckets)?;
+        let record_bytes = bytes[PAC_RECORD_BASE..record_table_end].to_vec();
+        Self::from_parts(path, len, buckets, &record_bytes, PacStorage::Memory(bytes))
+    }
+
+    fn from_parts(
+        path: PathBuf,
+        archive_len: usize,
+        buckets: Vec<PacBucket>,
+        record_bytes: &[u8],
+        storage: PacStorage,
+    ) -> Result<Self> {
+        let record_base = PAC_RECORD_BASE;
 
         let mut entries = Vec::new();
         let mut entry_by_key = HashMap::new();
@@ -86,7 +113,7 @@ impl PacArchive {
                         first: bucket.first_record_index,
                         count: bucket.record_count,
                     })?;
-            let last_record_end = PAC_RECORD_BASE
+            let last_record_end = record_base
                 .checked_add(last_exclusive.checked_mul(PAC_RECORD_SIZE).ok_or_else(|| {
                     AssetError::PacBucketOutOfRange {
                         path: path.clone(),
@@ -101,9 +128,9 @@ impl PacArchive {
                     first: bucket.first_record_index,
                     count: bucket.record_count,
                 })?;
-            if last_record_end > bytes.len() {
+            if last_record_end > archive_len {
                 return Err(AssetError::PacBucketOutOfRange {
-                    path,
+                    path: path.clone(),
                     bucket: bucket_index,
                     first: bucket.first_record_index,
                     count: bucket.record_count,
@@ -111,11 +138,11 @@ impl PacArchive {
             }
 
             for record_index in first..last_exclusive {
-                let off = PAC_RECORD_BASE + record_index * PAC_RECORD_SIZE;
+                let off = record_index * PAC_RECORD_SIZE;
                 let mut key = [0u8; 32];
-                key.copy_from_slice(&bytes[off..off + 32]);
-                let data_size = read_u32_at(&bytes, off + 32);
-                let data_offset = read_u32_at(&bytes, off + 36);
+                key.copy_from_slice(&record_bytes[off..off + 32]);
+                let data_size = read_u32_at(record_bytes, off + 32);
+                let data_offset = read_u32_at(record_bytes, off + 36);
 
                 let data_end = (data_offset as usize)
                     .checked_add(data_size as usize)
@@ -124,7 +151,7 @@ impl PacArchive {
                         offset: data_offset,
                         size: data_size,
                     })?;
-                if data_end > bytes.len() {
+                if data_end > archive_len {
                     return Err(AssetError::PacDataOutOfRange {
                         path: path.clone(),
                         offset: data_offset,
@@ -145,7 +172,7 @@ impl PacArchive {
 
         Ok(Self {
             path,
-            bytes,
+            storage,
             buckets,
             entries,
             entry_by_key,
@@ -175,15 +202,91 @@ impl PacArchive {
             .map(|&index| &self.entries[index]))
     }
 
-    pub fn read_entry(&self, entry: &PacEntry) -> Vec<u8> {
+    pub fn read_entry(&self, entry: &PacEntry) -> Result<Vec<u8>> {
         let start = entry.data_offset as usize;
         let end = start + entry.data_size as usize;
-        self.bytes[start..end].to_vec()
+        match &self.storage {
+            PacStorage::Memory(bytes) => Ok(bytes[start..end].to_vec()),
+            PacStorage::File => {
+                let mut file = File::open(&self.path).map_err(|e| AssetError::io(&self.path, e))?;
+                file.seek(SeekFrom::Start(start as u64))
+                    .map_err(|e| AssetError::io(&self.path, e))?;
+                let mut bytes = vec![0u8; entry.data_size as usize];
+                file.read_exact(&mut bytes)
+                    .map_err(|e| AssetError::io(&self.path, e))?;
+                Ok(bytes)
+            }
+        }
     }
 
     pub fn read_key(&self, key: &PacKey) -> Result<Option<Vec<u8>>> {
-        Ok(self.find_entry(key)?.map(|entry| self.read_entry(entry)))
+        self.find_entry(key)?
+            .map(|entry| self.read_entry(entry))
+            .transpose()
     }
+}
+
+fn parse_buckets(path: &Path, bytes: &[u8]) -> Result<Vec<PacBucket>> {
+    if bytes.len() < PAC_RECORD_BASE {
+        return Err(AssetError::PacTooSmall {
+            path: path.to_path_buf(),
+            len: bytes.len(),
+        });
+    }
+    let mut buckets = Vec::with_capacity(PAC_BUCKET_COUNT);
+    for bucket_index in 0..PAC_BUCKET_COUNT {
+        let off = PAC_BUCKET_TABLE_OFFSET + bucket_index * 8;
+        let first_record_index = read_u32_at(bytes, off);
+        let record_count = read_u32_at(bytes, off + 4);
+        buckets.push(PacBucket {
+            first_record_index,
+            record_count,
+        });
+    }
+    Ok(buckets)
+}
+
+fn record_table_end(path: &Path, archive_len: usize, buckets: &[PacBucket]) -> Result<usize> {
+    let mut max_record_index = 0usize;
+    for (bucket_index, bucket) in buckets.iter().enumerate() {
+        let first = bucket.first_record_index as usize;
+        let count = bucket.record_count as usize;
+        let end = first
+            .checked_add(count)
+            .ok_or_else(|| AssetError::PacBucketOutOfRange {
+                path: path.to_path_buf(),
+                bucket: bucket_index,
+                first: bucket.first_record_index,
+                count: bucket.record_count,
+            })?;
+        max_record_index = max_record_index.max(end);
+    }
+    let end = PAC_RECORD_BASE
+        .checked_add(
+            max_record_index
+                .checked_mul(PAC_RECORD_SIZE)
+                .ok_or_else(|| AssetError::PacBucketOutOfRange {
+                    path: path.to_path_buf(),
+                    bucket: 0,
+                    first: 0,
+                    count: max_record_index as u32,
+                })?,
+        )
+        .ok_or_else(|| AssetError::PacBucketOutOfRange {
+            path: path.to_path_buf(),
+            bucket: 0,
+            first: 0,
+            count: max_record_index as u32,
+        })?;
+    if end > archive_len {
+        return Err(AssetError::PacBucketOutOfRange {
+            path: path.to_path_buf(),
+            bucket: 0,
+            first: 0,
+            count: max_record_index as u32,
+        });
+    }
+    Ok(end)
 }
 
 fn read_u32_at(bytes: &[u8], off: usize) -> u32 {

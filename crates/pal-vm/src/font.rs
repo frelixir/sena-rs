@@ -28,8 +28,8 @@ impl PalFontSystem {
             font_size: 28,
             font_type: 1,
             effect: 0,
-            color: 0xFFFF_FFFF,
-            effect_color: 0xFF00_0000,
+            color: 0xFF00_0000,
+            effect_color: 0xFFFF_FFFF,
             ex_font_loaded: false,
         }
     }

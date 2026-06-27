@@ -10,6 +10,16 @@ pub fn pal_debug_enabled() -> bool {
         .map_or(false, |v| v == "1")
 }
 
+pub fn pal_debug_frame_enabled(frame_index: u64) -> bool {
+    if pal_debug_enabled() {
+        return true;
+    }
+    std::env::var("PAL_DEBUG_FRAME")
+        .ok()
+        .and_then(|raw| raw.parse::<u64>().ok())
+        .is_some_and(|target| target == frame_index)
+}
+
 #[derive(Debug)]
 pub struct FrameDebugDump {
     pub frame_index: u64,
@@ -109,6 +119,7 @@ pub fn collect_frame_dump(
                     WaitRequest::Time(ms) => format!("Time({ms})"),
                     WaitRequest::Click => "Click".to_owned(),
                     WaitRequest::ClickOrTime(ms) => format!("ClickOrTime({ms})"),
+                    WaitRequest::TextReveal(ms) => format!("TextReveal({ms})"),
                 };
                 format!("wait pc=0x{pc:08X} kind={k}")
             }

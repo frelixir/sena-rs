@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::runtime::RuntimeStatus;
@@ -83,7 +84,7 @@ pub struct SceneTexture {
     pub width: u32,
     pub height: u32,
     pub format: SceneTextureFormat,
-    pub pixels: Vec<u8>,
+    pub pixels: Arc<[u8]>,
 }
 
 impl SceneTexture {
@@ -100,7 +101,7 @@ impl SceneTexture {
             width,
             height,
             format: SceneTextureFormat::Rgba8,
-            pixels,
+            pixels: Arc::from(pixels),
         }
     }
 

@@ -267,7 +267,7 @@ fn fully_transparent_argb_sprite_does_not_emit_draw_command() {
 }
 
 #[test]
-fn sprite_scale_changes_draw_rect_around_center_offset() {
+fn sprite_scale_preserves_visible_source_aspect() {
     let mut sprites = make_system();
     let sprite = sprites.create(SpriteDesc {
         texture_id: SceneTextureId(10),
@@ -283,10 +283,13 @@ fn sprite_scale_changes_draw_rect_around_center_offset() {
     let DrawCommand::Sprite(draw) = &sprites.commands()[0] else {
         panic!("scaled sprite should draw");
     };
-    assert_eq!(draw.dst.x, 42.0);
-    assert_eq!(draw.dst.y, 36.0);
-    assert_eq!(draw.dst.w, 128.0);
-    assert_eq!(draw.dst.h, 64.0);
+    // PAL.dll scales around the source rect center, so doubling a 64x32 sprite
+    // shifts the submitted top-left position by half of the 64x32 growth.
+    assert!((draw.dst.x - (-22.0)).abs() < 0.001);
+    assert!((draw.dst.y - 4.0).abs() < 0.001);
+    assert!((draw.dst.w - 128.0).abs() < 0.001);
+    assert!((draw.dst.h - 64.0).abs() < 0.001);
+    assert_eq!(draw.center_offset, [-32.0, -16.0]);
 }
 
 #[test]

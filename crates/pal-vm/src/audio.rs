@@ -137,7 +137,12 @@ impl AudioSystem {
                 data
             }
         };
-        let decibels = self.effective_volume(handle)?.to_decibels() as f32;
+        let effective = self.effective_volume(handle)?;
+        let decibels = effective.to_decibels() as f32;
+        log::debug!(
+            "[trace-audio] play handle={handle:?} looping={looping} effective_raw={} db={decibels:.2}",
+            effective.raw()
+        );
         let manager = self
             .manager
             .as_mut()
@@ -192,6 +197,10 @@ impl AudioSystem {
 
     pub fn set_primary_volume(&mut self, volume: PalVolume) -> anyhow::Result<()> {
         self.primary_volume = volume.clamped();
+        log::debug!(
+            "[trace-audio] set_primary_volume raw={}",
+            self.primary_volume.raw()
+        );
         self.apply_all_volumes()
     }
 
@@ -205,6 +214,10 @@ impl AudioSystem {
         volume: PalVolume,
     ) -> anyhow::Result<()> {
         self.group_volumes.insert(group, volume.clamped());
+        log::debug!(
+            "[trace-audio] set_group_volume group={group:?} raw={}",
+            volume.clamped().raw()
+        );
         let len = self.groups.get(&group).map_or(0, Vec::len);
         for index in 0..len {
             self.apply_slot_volume(AudioHandle::new(group, index))?;
@@ -222,6 +235,10 @@ impl AudioSystem {
         volume: PalVolume,
     ) -> anyhow::Result<()> {
         self.slot_mut(handle)?.volume = volume.clamped();
+        log::debug!(
+            "[trace-audio] set_channel_volume handle={handle:?} raw={}",
+            volume.clamped().raw()
+        );
         self.apply_slot_volume(handle)
     }
 
@@ -388,14 +405,23 @@ impl AudioSystem {
     }
 
     fn apply_slot_volume(&mut self, handle: AudioHandle) -> anyhow::Result<()> {
-        let decibels = self.effective_volume(handle)?.to_decibels() as f32;
-        if let Some(sound) = self.slot_mut(handle)?.handle.as_mut() {
+        let effective = self.effective_volume(handle)?;
+        let decibels = effective.to_decibels() as f32;
+        let slot = self.slot_mut(handle)?;
+        let has_loaded_sound = slot.data.is_some() || slot.handle.is_some();
+        if has_loaded_sound {
+            log::debug!(
+                "[trace-audio] apply_slot_volume handle={handle:?} effective_raw={} db={decibels:.2}",
+                effective.raw()
+            );
+        }
+        if let Some(sound) = slot.handle.as_mut() {
             sound.set_volume(decibels, Tween::default());
         }
         Ok(())
     }
 
-    fn effective_volume(&self, handle: AudioHandle) -> anyhow::Result<PalVolume> {
+    pub fn effective_volume(&self, handle: AudioHandle) -> anyhow::Result<PalVolume> {
         let slot = self.slot(handle)?;
         let group = self.group_volume(handle.group);
         Ok(PalVolume::from_raw(

@@ -1798,7 +1798,7 @@ pub fn ext_opcode(category: u16, index: u16) -> Option<ExtOpcode> {
         (3, 14) => Some(ExtOpcode {
             category: 3,
             index: 14,
-            name: Some("sp_set_pos_ex"),
+            name: Some("sp_move_ex"),
         }),
         (3, 15) => Some(ExtOpcode {
             category: 3,
@@ -17443,7 +17443,7 @@ pub fn ext_opcode(category: u16, index: u16) -> Option<ExtOpcode> {
         (18, 6) => Some(ExtOpcode {
             category: 18,
             index: 6,
-            name: None,
+            name: Some("string_alloc"),
         }),
         (18, 7) => Some(ExtOpcode {
             category: 18,
@@ -17518,7 +17518,7 @@ pub fn ext_opcode(category: u16, index: u16) -> Option<ExtOpcode> {
         (18, 21) => Some(ExtOpcode {
             category: 18,
             index: 21,
-            name: None,
+            name: Some("strlenf"),
         }),
         (18, 22) => Some(ExtOpcode {
             category: 18,

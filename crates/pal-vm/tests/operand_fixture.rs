@@ -164,7 +164,9 @@ fn argument_base_write_read_roundtrip() {
 // ---------------------------------------------------------------------------
 
 /// Push three values, pack them, then read them via arg_stack operand.
-/// After pack_args with reversal: lo=1 → last pushed (top), lo=3 → first pushed (bottom).
+/// After pack_args, PAL's formal arg area exposes lo=1 as the first source
+/// argument. Game.exe sub_42CAA0 pops the value stack top-first into the
+/// argument array, then sub_42C910 resolves arg_stack[-N] as arg_top - N.
 #[test]
 fn pack_args_and_arg_stack_access() {
     // Push 10, 20, 30 onto stack; pack 3 args; read arg[1] → var[0], arg[2] → var[1], arg[3] → var[2]; halt
@@ -184,15 +186,15 @@ fn pack_args_and_arg_stack_access() {
     body.extend_from_slice(&opcode(32));
     body.extend_from_slice(&word(imm(3)));
 
-    // mov var[0] = arg_stack[1]  (top of stack push = 30)
+    // mov var[0] = arg_stack[1]  (native arg[-1], first source argument = 10)
     body.extend_from_slice(&opcode(1));
     body.extend_from_slice(&word(var(0)));
     body.extend_from_slice(&word(arg_stack(1)));
-    // mov var[1] = arg_stack[2]  (middle = 20)
+    // mov var[1] = arg_stack[2]  (native arg[-2], middle = 20)
     body.extend_from_slice(&opcode(1));
     body.extend_from_slice(&word(var(1)));
     body.extend_from_slice(&word(arg_stack(2)));
-    // mov var[2] = arg_stack[3]  (bottom = 10)
+    // mov var[2] = arg_stack[3]  (native arg[-3], newest source argument = 30)
     body.extend_from_slice(&opcode(1));
     body.extend_from_slice(&word(var(2)));
     body.extend_from_slice(&word(arg_stack(3)));
@@ -206,8 +208,8 @@ fn pack_args_and_arg_stack_access() {
 
     assert_eq!(
         runtime.vars()[0],
-        30,
-        "arg_stack[1] should be last-pushed value (30)"
+        10,
+        "arg_stack[1] should be native arg[-1] / first source argument (10)"
     );
     assert_eq!(
         runtime.vars()[1],
@@ -216,8 +218,8 @@ fn pack_args_and_arg_stack_access() {
     );
     assert_eq!(
         runtime.vars()[2],
-        10,
-        "arg_stack[3] should be first-pushed value (10)"
+        30,
+        "arg_stack[3] should be native arg[-3] / newest source argument (30)"
     );
 }
 
@@ -313,7 +315,7 @@ fn wait_click_emits_request_and_status_is_wait_click() {
 }
 
 #[test]
-fn wait_click_zero_duration_is_click_only() {
+fn wait_click_zero_duration_is_one_ms_click_or_time() {
     let entry_pc = 12u32;
     let mut body = Vec::new();
     body.extend_from_slice(&opcode(31));
@@ -330,7 +332,7 @@ fn wait_click_zero_duration_is_click_only() {
         .run_frame(&assets, &config)
         .expect("run_frame should succeed on wait_click(0)");
 
-    assert_eq!(tick.wait_request, Some(pal_vm::WaitRequest::Click));
+    assert_eq!(tick.wait_request, Some(pal_vm::WaitRequest::ClickOrTime(1)));
     assert!(
         matches!(runtime.status(), RuntimeStatus::WaitClick { .. }),
         "expected WaitClick status, got {:?}",
@@ -339,7 +341,7 @@ fn wait_click_zero_duration_is_click_only() {
 }
 
 #[test]
-fn wait_click_no_anim_zero_duration_is_click_only() {
+fn wait_click_no_anim_zero_duration_is_one_ms_click_or_time() {
     let entry_pc = 12u32;
     let mut body = Vec::new();
     body.extend_from_slice(&opcode(31));
@@ -356,7 +358,7 @@ fn wait_click_no_anim_zero_duration_is_click_only() {
         .run_frame(&assets, &config)
         .expect("run_frame should succeed on wait_click_no_anim(0)");
 
-    assert_eq!(tick.wait_request, Some(pal_vm::WaitRequest::Click));
+    assert_eq!(tick.wait_request, Some(pal_vm::WaitRequest::ClickOrTime(1)));
     assert!(
         matches!(runtime.status(), RuntimeStatus::WaitClick { .. }),
         "expected WaitClick status, got {:?}",
@@ -625,7 +627,10 @@ fn high_frequency_pal_extcalls_are_stack_safe() {
     body.extend_from_slice(&word(ext_raw(3, 39)));
     body.extend_from_slice(&word(dst_slot(3)));
 
-    // sp_set_transition(transition_slot=2, sprite_slot=7, kind=1, duration=300)
+    // sp_set_transition(name=2, slot=7, kind=1, duration=300). The fixture has
+    // no File.dat/resource manager entries, so a known extcall should consume
+    // its stack safely and return a PAL-style failure status instead of being
+    // reported as skipped.
     for value in [300, 1, 7, 2] {
         body.extend_from_slice(&opcode(31));
         body.extend_from_slice(&word(imm(value)));
@@ -653,13 +658,19 @@ fn high_frequency_pal_extcalls_are_stack_safe() {
         .expect("high-frequency PAL extcalls should run");
 
     assert_eq!(runtime.vars()[0], 0);
-    for index in 1..=5 {
+    for index in 1..=3 {
         assert_eq!(
             runtime.vars()[index],
             1,
             "var[{index}] should report success"
         );
     }
+    assert_eq!(
+        runtime.vars()[4],
+        0,
+        "sp_set_transition without a resolvable image resource reports failure"
+    );
+    assert_eq!(runtime.vars()[5], 1, "window/effect fade reports success");
     assert!(
         tick.frame_events.is_empty(),
         "PAL extcalls must not be reported as skipped"
@@ -733,7 +744,11 @@ fn wait_sync_step_does_not_clear_title_wait_memdat_flag() {
 
     run_to_stop(&mut runtime, &assets, &config);
 
-    assert_eq!(runtime.vars()[0], 1);
+    assert_eq!(
+        runtime.vars()[0],
+        0,
+        "debug_window_set returns the previous PAL debug-window state"
+    );
     assert_eq!(runtime.vars()[1], 1);
     assert_eq!(
         runtime.vars()[2],

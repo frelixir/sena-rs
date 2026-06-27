@@ -284,21 +284,27 @@ static SIG_TEXT: ExtSig = sig!(2, 2, "text", pop=4,
 ///
 /// Purpose: Hide the ADV text window and associated UI state immediately.
 ///
-/// VM arguments: none.
+/// VM arguments:
+/// - pop[0]: redraw_flag (Flag) — non-zero requests text redraw/update flag.
 ///
 /// Return: void.
 ///
 /// Side effects: ChangesTextState.
 ///
 /// Evidence:
+/// - Game.sqlite: sub_43F340 pops one flag, clears visible text sprite colors,
+///   calls sub_439C10(...,0), and sets ctx[201021] when flag is non-zero.
 /// - Writeup: docs/writeup.md 24.17
 ///
-/// Engine: Blocked — dispatched through dispatch_text_stub, hides text window.
+/// Engine: Blocked — hides text window without releasing the native text sprites.
 ///
-/// Decompiler: Blocked — renders as text_hide().
-static SIG_TEXT_HIDE: ExtSig = sig!(2, 3, "text_hide", pop=0, params=[],
+/// Decompiler: Blocked — renders as text_hide(redraw_flag).
+static SIG_TEXT_HIDE: ExtSig = sig!(2, 3, "text_hide", pop=1,
+    params=["redraw_flag":0=Flag=>"non-zero requests native redraw/update flag"],
     return=Void, effects=[ChangesTextState], purpose="Hide the ADV text window/state.",
-    status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md 24.17"]);
+    status=Blocked, decompiler=Blocked,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_43F340 pops one flag, hides text sprite colors, and updates ctx[201021]", Writeup:"docs/writeup.md 24.17"],
+    game="0x0043F340");
 /// category 2 index 4: text_show
 ///
 /// Purpose: Show the ADV text window.  The visible flag is observed in script
@@ -322,6 +328,33 @@ static SIG_TEXT_SHOW: ExtSig = sig!(2, 4, "text_show", pop=1,
     params=["visible":0=Flag=>"show flag observed in script wrappers"],
     return=Void, effects=[ChangesTextState], purpose="Show the ADV text window/state.",
     status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md 24.17"]);
+/// category 2 index 5: text_set_btn
+///
+/// Purpose: Select the active text-window button id used by the ADV message
+/// UI. Native clears the selected button's per-window reaction slot after
+/// storing the id in the active text context.
+///
+/// VM arguments:
+/// - pop[0]: button_id (Integer) — text button/window id.
+///
+/// Return: status integer.
+///
+/// Side effects: ChangesTextState.
+///
+/// Evidence:
+/// - Game.sqlite: sub_43F1A0 pops one value, stores it at text context +44,
+///   clears `4512 * id + ctx + 12980`, and logs `text_set_btn %d`.
+///
+/// Engine: Verified — pal-vm dispatch_text_stub index 5 pops one id and stores
+/// it in TextSubsystemState.
+///
+/// Decompiler: Verified — renders as text_set_btn(button_id).
+static SIG_TEXT_SET_BTN: ExtSig = sig!(2, 5, "text_set_btn", pop=1,
+    params=["button_id":0=Integer=>"text button/window id"],
+    return=Integer, effects=[ChangesTextState], purpose="Select active ADV text-window button id.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_43F1A0 pops button id and clears its text reaction slot"],
+    game="0x0043F1A0");
 /// category 2 index 8: text_clear
 ///
 /// Purpose: Clear the current text line and schedule body/name sprite release
@@ -342,6 +375,85 @@ static SIG_TEXT_SHOW: ExtSig = sig!(2, 4, "text_show", pop=1,
 static SIG_TEXT_CLEAR: ExtSig = sig!(2, 8, "text_clear", pop=0, params=[],
     return=Void, effects=[ChangesTextState, DeletesSprite], purpose="Clear current text and release body/name sprites on the next text sync.",
     status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md 24.17"]);
+/// category 2 index 9: text_clear_ex
+///
+/// Purpose: Zero-argument text cleanup/repaint hook adjacent to `text_clear` in
+/// the native category-2 dispatch table.  It is reachable from title system
+/// menu setup and must not fall through to raw `ext_0002_0009`.
+///
+/// VM arguments: none.
+///
+/// Return: void.
+///
+/// Side effects: ChangesTextState.
+///
+/// Evidence: runtime reachability at PCs 0x00039584/0x0003A960/0x0003AE8C;
+/// Game.sqlite confirms the neighboring `sub_43F0B0 text_clear` zero-argument
+/// cleanup/paint behavior. Exact handler EA for index 9 remains blocked.
+static SIG_TEXT_CLEAR_EX: ExtSig = sig!(2, 9, "text_clear_ex", pop=0, params=[],
+    return=Void, effects=[ChangesTextState], purpose="Zero-argument text cleanup/repaint hook adjacent to text_clear.",
+    status=Blocked, decompiler=Blocked,
+    evidence=[RuntimeTrace:"reachable extcall 0002:0009 at PCs 0x00039584/0x0003A960/0x0003AE8C", GameSqlite:"reverse/Game.sqlite neighboring sub_43F0B0 text_clear"]);
+/// category 2 index 10: text_get_time
+///
+/// Purpose: Return the current PAL text/task time counter.  Native does not pop
+/// any script arguments; it writes `*(PalTaskGetTaskData(0)+32)` into the
+/// extcall destination slot.
+///
+/// VM arguments: none.
+///
+/// Return: integer task time.
+///
+/// Side effects: none beyond VM return writeback.
+///
+/// Evidence:
+/// - Game.sqlite: sub_43F010 has no stack-pop sequence and stores the task-time
+///   dword to `dst_slot`.
+///
+/// Engine: Verified — pal-vm pops zero arguments and returns elapsed text task
+/// time through ExtCallOutcome.
+///
+/// Decompiler: Verified — renders destination assignment when dst_slot is
+/// non-zero, e.g. `v6 = text_get_time()`.
+static SIG_TEXT_GET_TIME: ExtSig = sig!(2, 10, "text_get_time", pop=0,
+    params=[],
+    return=Integer, effects=[WritesVmMemory], purpose="Return the current text/task time counter.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_43F010 writes PalTaskGetTaskData(0)+32 to dst_slot and pops no args"],
+    game="0x0043F010");
+/// category 2 index 14: text_set_icon_animation_time
+///
+/// Purpose: Set the animation time for one of the four ADV text-window icon
+/// animations.
+///
+/// VM arguments:
+/// - pop[0]: icon_slot (Integer) — icon animation slot, native accepts 0..3.
+/// - pop[1]: duration_ms (DurationMs) — animation time passed to
+///   PalAnimationSetTime.
+///
+/// Return: status integer.
+///
+/// Side effects: ChangesTextState.
+///
+/// Evidence:
+/// - Game.sqlite: sub_43ED40 pops icon slot then duration and calls
+///   PalAnimationSetTime(text_icon_animation[slot], duration).
+/// - PAL.sqlite: PalAnimationSetTime is the PAL-side animation timer API.
+///
+/// Engine: Verified — pal-vm consumes the same two arguments and updates text
+/// icon timing state used by the renderer.
+///
+/// Decompiler: Verified — renders text_set_icon_animation_time(icon_slot,
+/// duration_ms).
+static SIG_TEXT_SET_ICON_ANIMATION_TIME: ExtSig = sig!(2, 14, "text_set_icon_animation_time", pop=2,
+    params=[
+        "icon_slot":0=Integer=>"text icon animation slot, 0..3",
+        "duration_ms":1=DurationMs=>"animation time passed to PalAnimationSetTime"
+    ],
+    return=Integer, effects=[ChangesTextState], purpose="Set ADV text icon animation time.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_43ED40 pops icon slot and duration then calls PalAnimationSetTime", PalSqlite:"reverse/PAL.sqlite PalAnimationSetTime 0x10120110 -> PalAnimationSetTime_0 0x10239C40 writes duration/start time"],
+    game="0x0043ED40", pal="PalAnimationSetTime" => "0x10120110");
 /// category 2 index 15: text_w
 ///
 /// Purpose: Set current ADV line and start the character-by-character visual
@@ -352,7 +464,7 @@ static SIG_TEXT_CLEAR: ExtSig = sig!(2, 8, "text_clear", pop=0, params=[],
 /// - pop[0]: voice_or_aux_id (TextId) — voice/aux id, or -1.
 /// - pop[1]: name_or_aux_id (TextId) — speaker name id, or -1.
 /// - pop[2]: text_id (TextId) — Text.dat byte offset.
-/// - pop[3]: mode (Mode) — ADV channel selector.
+/// - pop[3]: duration_ms (DurationMs) — explicit reveal duration; 0 uses native text-speed timing.
 ///
 /// Return: void.
 ///
@@ -360,6 +472,7 @@ static SIG_TEXT_CLEAR: ExtSig = sig!(2, 8, "text_clear", pop=0, params=[],
 ///
 /// Evidence:
 /// - Writeup: docs/writeup.md 24.17
+/// - GameSqlite: sub_43FFC0 writes pop[3] to text_ctx+4196; if zero it derives timing from task time and text speed.
 /// - RuntimeTrace: text_wait index=15 followed by explicit wait_click
 ///
 /// Engine: Blocked — queues reveal-mode text; reveal proceeds independently.
@@ -367,14 +480,14 @@ static SIG_TEXT_CLEAR: ExtSig = sig!(2, 8, "text_clear", pop=0, params=[],
 /// Decompiler: Blocked — renders four args in display order.
 static SIG_TEXT_W: ExtSig = sig!(2, 15, "text_w", pop=4,
     params=[
-        "mode":3=Mode=>"text mode / ADV channel",
+        "duration_ms":3=DurationMs=>"explicit text reveal duration; 0 uses native text-speed timing",
         "text_id":2=TextId=>"Text.dat byte offset or dynamic string id",
         "name_or_aux_id":1=TextId=>"speaker/name text id or -1",
         "voice_or_aux_id":0=TextId=>"voice/aux id or -1"
     ],
     return=Void, effects=[ChangesTextState], purpose="Set current ADV line and start visual reveal; does not block VM.",
     status=Blocked, decompiler=Blocked,
-    evidence=[Writeup:"docs/writeup.md 24.17", RuntimeTrace:"text_wait index=15 followed by explicit wait_click"]);
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_43FFC0 writes pop[3] to text_ctx+4196 and computes reveal timing when it is zero", RuntimeTrace:"text_wait index=15 followed by explicit wait_click"]);
 /// category 2 index 16: text_a
 ///
 /// Purpose: Set current ADV line in fully-visible (no reveal) mode.  Does not
@@ -384,7 +497,7 @@ static SIG_TEXT_W: ExtSig = sig!(2, 15, "text_w", pop=4,
 /// - pop[0]: voice_or_aux_id (TextId) — voice/aux id, or -1.
 /// - pop[1]: name_or_aux_id (TextId) — speaker name id, or -1.
 /// - pop[2]: text_id (TextId) — Text.dat byte offset.
-/// - pop[3]: mode (Mode) — ADV channel selector.
+/// - pop[3]: duration_ms (DurationMs) — timing/mode lane stored with the ADV line.
 ///
 /// Return: void.
 ///
@@ -397,7 +510,7 @@ static SIG_TEXT_W: ExtSig = sig!(2, 15, "text_w", pop=4,
 ///
 /// Decompiler: Blocked — renders four args in display order.
 static SIG_TEXT_A: ExtSig = sig!(2, 16, "text_a", pop=4,
-    params=["mode":3=Mode, "text_id":2=TextId, "name_or_aux_id":1=TextId, "voice_or_aux_id":0=TextId],
+    params=["duration_ms":3=DurationMs, "text_id":2=TextId, "name_or_aux_id":1=TextId, "voice_or_aux_id":0=TextId],
     return=Void, effects=[ChangesTextState], purpose="Set current ADV line fully visible; does not block VM.",
     status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md 24.17"]);
 /// category 2 index 17: text_wa
@@ -409,7 +522,7 @@ static SIG_TEXT_A: ExtSig = sig!(2, 16, "text_a", pop=4,
 /// - pop[0]: voice_or_aux_id (TextId) — voice/aux id, or -1.
 /// - pop[1]: name_or_aux_id (TextId) — speaker name id, or -1.
 /// - pop[2]: text_id (TextId) — Text.dat byte offset.
-/// - pop[3]: mode (Mode) — ADV channel selector.
+/// - pop[3]: duration_ms (DurationMs) — explicit reveal duration/timing lane.
 ///
 /// Return: void.
 ///
@@ -422,7 +535,7 @@ static SIG_TEXT_A: ExtSig = sig!(2, 16, "text_a", pop=4,
 ///
 /// Decompiler: Blocked — renders four args in display order.
 static SIG_TEXT_WA: ExtSig = sig!(2, 17, "text_wa", pop=4,
-    params=["mode":3=Mode, "text_id":2=TextId, "name_or_aux_id":1=TextId, "voice_or_aux_id":0=TextId],
+    params=["duration_ms":3=DurationMs, "text_id":2=TextId, "name_or_aux_id":1=TextId, "voice_or_aux_id":0=TextId],
     return=Void, effects=[ChangesTextState], purpose="Set current ADV line and start visual reveal; does not block VM.",
     status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md 24.17"]);
 /// category 2 index 22: text_set_base
@@ -460,6 +573,82 @@ static SIG_TEXT_SET_BASE: ExtSig = sig!(2, 22, "text_set_base", pop=4,
     return=Integer, effects=[ChangesTextState], purpose="Select ADV message-window base image/resource.",
     status=Blocked, decompiler=Blocked,
     evidence=[Disassembly:"docs/dis.txt 000346D8..00034760", RuntimeTrace:"text_set_base args=[0,268435455,268435455,1418]"]);
+/// category 2 index 25: texttimecheckset
+///
+/// Purpose: Create the native AdvTextTimeCheckTask sprite that measures/renders
+/// a timing-check text block at a requested rectangle.
+///
+/// VM arguments:
+/// - pop[0]: text_id (TextId) — string id resolved by sub_44B120.
+/// - pop[1]: x (CoordinateX) — task sprite x coordinate.
+/// - pop[2]: y (CoordinateY) — task sprite y coordinate.
+/// - pop[3]: width (CoordinateX) — requested text/check width.
+/// - pop[4]: height (CoordinateY) — requested text/check height.
+///
+/// Return: status integer.
+///
+/// Side effects: CreatesTask, CreatesSprite, ChangesTextState.
+///
+/// Evidence:
+/// - Game.sqlite: sub_43E590 pops five values, resolves the first as a string,
+///   then stores `sub_43A470(string, x, y, width, height)` in text task state.
+/// - Game.sqlite: sub_43A470 calls PalTaskCreate(sub_43A420), PalSpriteCreate,
+///   PalSpriteSetPos, and PalSpriteViewCtrl.
+///
+/// Engine: Blocked — pal-vm now consumes and traces all five parameters, but
+/// the temporary native check sprite/task lifecycle is not yet equivalent.
+///
+/// Decompiler: Verified — renders all five arguments instead of the previous
+/// erroneous empty call.
+static SIG_TEXT_TIME_CHECK_SET: ExtSig = sig!(2, 25, "texttimecheckset", pop=5,
+    params=[
+        "text_id":0=TextId=>"string id resolved by sub_44B120",
+        "x":1=CoordinateX=>"check sprite x coordinate",
+        "y":2=CoordinateY=>"check sprite y coordinate",
+        "width":3=CoordinateX=>"check text width",
+        "height":4=CoordinateY=>"check text height"
+    ],
+    return=Integer, effects=[CreatesTask, CreatesSprite, ChangesTextState],
+    purpose="Create native ADV text timing-check task/sprite.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_43E590 pops five args and calls sub_43A470", GameSqlite:"reverse/Game.sqlite sub_43A470 creates AdvTextTimeCheckTask and PalSpriteCreate/PalSpriteSetPos"],
+    game="0x0043E590");
+/// category 2 index 28: text_set_color
+///
+/// Purpose: Configure one entry in the ADV text color table, keyed by a label
+/// string, with separate glyph and effect colors.
+///
+/// VM arguments:
+/// - pop[0]: color_slot (Integer) — native color table slot; valid range < 16.
+/// - pop[1]: label_string (TextId) — string copied with sub_44B120.
+/// - pop[2]: text_color (Color) — primary glyph color.
+/// - pop[3]: effect_color (Color) — outline/effect color.
+///
+/// Return: status integer.
+///
+/// Side effects: ChangesTextState.
+///
+/// Evidence:
+/// - Game.sqlite: sub_43E2E0 pops four values, rejects slots >=16, resolves the
+///   label string, and stores enable/text/effect/length/string fields in the
+///   PAL task text color table.
+///
+/// Engine: Blocked — pal-vm consumes the correct four arguments and applies
+/// the active color pair, but does not yet model all 16 native label entries.
+///
+/// Decompiler: Verified — renders text_set_color(color_slot, label_string,
+/// text_color, effect_color).
+static SIG_TEXT_SET_COLOR: ExtSig = sig!(2, 28, "text_set_color", pop=4,
+    params=[
+        "color_slot":0=Integer=>"native text color table slot, valid when <16",
+        "label_string":1=TextId=>"label string id copied with sub_44B120",
+        "text_color":2=Color=>"primary glyph color",
+        "effect_color":3=Color=>"outline/effect color"
+    ],
+    return=Integer, effects=[ChangesTextState], purpose="Configure ADV text color-table entry.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_43E2E0 pops slot,label,text_color,effect_color and writes the text color table"],
+    game="0x0043E2E0");
 
 // Category 3 - sprite wrappers.
 
@@ -562,25 +751,59 @@ static SIG_SP_CLS: ExtSig = sig!(3, 5, "sp_cls", pop=1,
     status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md sprite sections"]);
 /// category 3 index 6: sp_set_alpha
 ///
-/// Purpose: Set the transparency of a sprite slot immediately.
+/// Purpose: Set the transparency of a sprite slot by updating the high alpha
+/// byte in the Game sprite wrapper color lane.
 ///
 /// VM arguments:
 /// - pop[0]: slot (SpriteSlot) — sprite slot index.
 /// - pop[1]: alpha (Alpha) — alpha value (0=transparent, 255=opaque).
 ///
-/// Return: void.
+/// Return: status integer.
 ///
 /// Side effects: MutatesSprite.
 ///
 /// Evidence:
-/// - Writeup: docs/writeup.md sprite sections
+/// - Game.sqlite: sub_4281D0 pops slot, alpha; resolves wrapper with
+///   sub_449120; writes `(alpha << 24) | (color & 0x00FFFFFF)` to wrapper+0x5C
+///   and clears WORD wrapper+0x60.
+/// - PAL.sqlite: PalSpriteSetColor_0 writes PalSprite+0x3C color; shared commit
+///   path sub_448600 applies dirty flag 0x80000 through PalSpriteSetColor.
 ///
-/// Engine: Blocked — delegates to PalSpriteSetColor or equivalent alpha API.
+/// Engine: Verified — normal sprite slots and PAL encoded button layers update
+/// alpha through the shared sprite/button color path; pending alpha is queued
+/// until sprite creation when script emits alpha before creation.
 ///
-/// Decompiler: Blocked — renders as sp_set_alpha(slot, alpha).
+/// Decompiler: Verified — renders as sp_set_alpha(slot, alpha).
 static SIG_SP_SET_ALPHA: ExtSig = sig!(3, 6, "sp_set_alpha", pop=2,
-    params=["slot":0=SpriteSlot, "alpha":1=Alpha], return=Void, effects=[MutatesSprite], purpose="Set sprite alpha.",
-    status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md sprite sections"]);
+    params=[
+        "slot":0=SpriteSlot=>"sprite slot or encoded PAL layer slot such as 0x010000NN",
+        "alpha":1=Alpha=>"0 transparent, 255 opaque"
+    ],
+    return=Integer, effects=[MutatesSprite],
+    purpose="Set the sprite/button alpha lane by replacing the high byte of the native color field.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_4281D0 pops slot,alpha and writes wrapper color alpha high byte", PalSqlite:"reverse/PAL.sqlite PalSpriteSetColor_0 writes PalSprite+0x3C color; sub_448600 applies dirty 0x80000"],
+    game="0x004281D0", pal="PalSpriteSetColor" => "0x1025FFC0");
+/// category 3 index 7: set_priority
+///
+/// Purpose: Advance the native sprite priority cursor by one priority lane.
+static SIG_SP_SET_PRIORITY_LANE: ExtSig = sig!(3, 7, "set_priority", pop=1,
+    params=["lane":0=Integer=>"priority lane delta; native adds 134*lane to ctx+804232"],
+    return=Integer, effects=[MutatesSprite],
+    purpose="Advance the Game sprite priority cursor.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_427780 pops lane and updates VM offset +804232 by 134*lane"],
+    game="0x00427780");
+/// category 3 index 9: sp_set_center
+///
+/// Purpose: Set a sprite's PAL center offset.
+static SIG_SP_SET_CENTER: ExtSig = sig!(3, 9, "sp_set_center", pop=3,
+    params=["slot":0=SpriteSlot, "center_x":1=CoordinateX, "center_y":2=CoordinateY],
+    return=Integer, effects=[MutatesSprite],
+    purpose="Set PalSprite center offset for a sprite slot.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_4282B0 pops slot/center_x/center_y and calls PalSpriteSetCenterOffset"],
+    game="0x004282B0");
 /// category 3 index 12: set_filter
 ///
 /// Purpose: Set a sprite render/filter mode flag.  The script uses this as a
@@ -637,51 +860,372 @@ static SIG_SP_CLS_EX: ExtSig = sig!(3, 11, "sp_cls_ex", pop=1,
     evidence=[GameSqlite:"reverse/Game.sqlite sprite dispatch shares 3:0005/000B/000D clear path", PalSqlite:"PalSpriteRelease 0x10120D45 / Game import thunk 0x45049E", RuntimeTrace:"pal-vm dispatch_sprite_ext index 11 pops 1"]);
 /// category 3 index 17: sp_set_scale
 ///
-/// Purpose: Set the display scale of a sprite slot.
+/// Purpose: Set the display scale lane of a sprite slot.
 ///
 /// VM arguments:
 /// - pop[0]: slot (SpriteSlot) — sprite slot index.
-/// - pop[1]: scale (Integer) — scale factor (100 = 100% / normal size).
+/// - pop[1]: scale (Integer) — raw percent scale, 100 = 1.0.
 ///
-/// Return: void.
+/// Return: status integer.
 ///
 /// Side effects: MutatesSprite.
 ///
 /// Evidence:
-/// - Writeup: docs/writeup.md 24.14
-/// - PAL.sqlite: PalSpriteSetScale 0x1011FC5B / Game import thunk 0x450C4E
+/// - Game.sqlite: sub_428000 pops slot, raw_scale; resolves wrapper with
+///   sub_449120 and stores raw_scale / 100.0 into wrapper offset +84.  It does
+///   not mutate x/y placement.
+/// - PAL.sqlite: PalSpriteSetScale_0 stores its scale argument into PalSprite
+///   offset +112 and returns 1.
 ///
-/// Engine: Blocked — delegates to PalSpriteSetScale.
+/// Engine: Verified — stores native raw scale and applies it to the sprite scale
+/// lane without recomputing placement.
 ///
-/// Decompiler: Blocked — renders as sp_set_scale(slot, scale).
+/// Decompiler: Verified — renders as sp_set_scale(slot, scale).
 static SIG_SP_SET_SCALE: ExtSig = sig!(3, 17, "sp_set_scale", pop=2,
-    params=["slot":0=SpriteSlot, "scale":1=Integer], return=Void, effects=[MutatesSprite], purpose="Set sprite scale.",
-    status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md 24.14", PalSqlite:"PalSpriteSetScale 0x1011FC5B / Game import thunk 0x450C4E"]);
+    params=[
+        "slot":0=SpriteSlot=>"sprite slot resolved through sub_449120",
+        "scale":1=Integer=>"raw percent; native wrapper stores scale / 100.0"
+    ],
+    return=Integer, effects=[MutatesSprite],
+    purpose="Set the sprite scale lane; native handler does not recompute x/y placement.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_428000 pops slot,scale and stores scale/100.0 into wrapper+84", PalSqlite:"reverse/PAL.sqlite PalSpriteSetScale_0 writes PalSprite+112 and returns 1"],
+    game="0x00428000", pal="PalSpriteSetScale" => "0x10260DF0");
+/// category 3 index 15: sp_set_rect_pos
+static SIG_SP_SET_RECT_POS: ExtSig = sig!(3, 15, "sp_set_rect_pos", pop=3,
+    params=["slot":0=SpriteSlot, "cell_x":1=Integer, "cell_y":2=Integer],
+    return=Integer, effects=[MutatesSprite],
+    purpose="Set the active sprite cell/rect position.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_4283B0 pops slot/cell_x/cell_y and calls PalSpriteRectSetPos"],
+    game="0x004283B0");
+/// category 3 index 18: sp_set_rotate
+static SIG_SP_SET_ROTATE: ExtSig = sig!(3, 18, "sp_set_rotate", pop=4,
+    params=["slot":0=SpriteSlot, "x":1=Integer, "y":2=Integer, "z":3=Integer],
+    return=Integer, effects=[MutatesSprite],
+    purpose="Set sprite x/y/z rotation lanes.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_427E90 pops slot/x/y/z and writes rotation fields"],
+    game="0x00427E90");
+/// category 3 index 21: sp_get_color
+static SIG_SP_GET_COLOR: ExtSig = sig!(3, 21, "sp_get_color", pop=1,
+    params=["slot":0=SpriteSlot],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Return a sprite's RGB color, or -1 when no image exists.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_427A20 pops slot and writes wrapper color & 0xFFFFFF to return slot"],
+    game="0x00427A20");
 /// category 3 index 25: sp_set_pos_move
 ///
-/// Purpose: Animate a sprite slot to (x, y, z) over time.  Spawns a task;
+/// Purpose: Move a sprite slot by a relative (dx, dy, dz) delta.  When an
+/// action duration is active, the movement is interpolated over that duration;
 /// script may follow with a wait if blocking is needed.
 ///
-/// VM arguments (display order: slot, x, y, z):
+/// VM arguments (display order: slot, dx, dy, dz):
 /// - pop[0]: slot (SpriteSlot) — sprite slot to animate.
-/// - pop[1]: x (CoordinateX) — target x position.
-/// - pop[2]: y (CoordinateY) — target y position.
-/// - pop[3]: z (CoordinateZ) — target depth.
+/// - pop[1]: dx (CoordinateX) — relative x delta in configured logical coordinates.
+/// - pop[2]: dy (CoordinateY) — relative y delta in configured logical coordinates.
+/// - pop[3]: dz (CoordinateZ) — relative depth delta.
 ///
 /// Return: void.
 ///
 /// Side effects: MutatesSprite, CreatesTask.
 ///
 /// Evidence:
+/// - IDB: reverse/STRUCTS_RE.md shows VmExtcall_SpSetPosMove adds deltas to position/velocity fields.
 /// - Writeup: docs/writeup.md 24.13
 ///
-/// Engine: Blocked — spawns move-animation task.
+/// Engine: Blocked — mutates or tweens sprite position by relative delta.
 ///
-/// Decompiler: Blocked — renders as sp_set_pos_move(slot, x, y, z).
+/// Decompiler: Blocked — renders as sp_set_pos_move(slot, dx, dy, dz).
 static SIG_SP_SET_POS_MOVE: ExtSig = sig!(3, 25, "sp_set_pos_move", pop=4,
-    params=["slot":0=SpriteSlot, "x":1=CoordinateX, "y":2=CoordinateY, "z":3=CoordinateZ],
-    return=Void, effects=[MutatesSprite, CreatesTask], purpose="Animate/move a sprite position.",
-    status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md 24.13"]);
+    params=["slot":0=SpriteSlot, "dx":1=CoordinateX, "dy":2=CoordinateY, "dz":3=CoordinateZ],
+    return=Void, effects=[MutatesSprite, CreatesTask], purpose="Move or tween a sprite by a relative delta.",
+    status=Blocked, decompiler=Blocked, evidence=[Writeup:"reverse/STRUCTS_RE.md VmExtcall_SpSetPosMove adds delta fields", Writeup:"docs/writeup.md 24.13"]);
+/// category 3 index 24: sp_set_rect
+static SIG_SP_SET_RECT: ExtSig = sig!(3, 24, "sp_set_rect", pop=5,
+    params=["slot":0=SpriteSlot, "left":1=CoordinateX, "top":2=CoordinateY, "right":3=CoordinateX, "bottom":4=CoordinateY],
+    return=Integer, effects=[MutatesSprite],
+    purpose="Set a sprite source rectangle.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_4284D0 pops slot/left/top/right/bottom and writes rect fields"],
+    game="0x004284D0");
+/// category 3 index 26: sp_get_alpha
+static SIG_SP_GET_ALPHA: ExtSig = sig!(3, 26, "sp_get_alpha", pop=1,
+    params=["slot":0=SpriteSlot],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Return a sprite alpha value, or -1 when no image exists.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_427AE0 pops slot and writes wrapper alpha byte to return slot"],
+    game="0x00427AE0");
+/// category 3 index 27: sp_get_rotate
+static SIG_SP_GET_ROTATE: ExtSig = sig!(3, 27, "sp_get_rotate", pop=2,
+    params=["slot":0=SpriteSlot=>"sprite slot", "axis":1=Mode=>"0=x, 1=y, 2=z; other returns slot in native"],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Return one sprite rotation axis.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_427810 pops slot/axis and returns x/y/z rotation lane; debug string says sp_get_rotate"],
+    game="0x00427810");
+/// category 3 index 29: sp_get_width
+///
+/// Purpose: Return the PAL logical cell width of a script sprite.  PAL export
+/// `PalSpriteGetWidth` reads sprite offset +0x5C, which is the cell/logical
+/// width, not necessarily the backing texture width.
+///
+/// VM arguments:
+/// - pop[0]: slot (SpriteSlot) — script sprite slot.
+///
+/// Return: integer width in logical pixels.
+///
+/// Side effects: WritesVmMemory.
+///
+/// Evidence:
+/// - PAL.sqlite: PalSpriteGetWidth 0x1011EB2B -> PalSpriteGetWidth_0 returns
+///   sprite +0x5C.
+/// - RuntimeTrace: pal-vm dispatch_sprite_ext index 29 pops one slot and
+///   returns SpriteSystem::get_width().
+///
+/// Engine: Verified — returns the sprite cell/logical width from the portable
+/// sprite object.
+///
+/// Decompiler: Verified — renders sp_get_width(slot) instead of ext_0003_001D.
+static SIG_SP_GET_WIDTH: ExtSig = sig!(3, 29, "sp_get_width", pop=1,
+    params=["slot":0=SpriteSlot=>"script sprite slot"],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Return PAL logical/cell sprite width.",
+    status=Verified, decompiler=Verified,
+    evidence=[PalSqlite:"reverse/PAL.sqlite PalSpriteGetWidth 0x1011EB2B -> PalSpriteGetWidth_0 returns sprite+0x5C", RuntimeTrace:"pal-vm dispatch_sprite_ext index 29 pops slot and returns SpriteSystem::get_width"],
+    pal="PalSpriteGetWidth" => "0x1011EB2B");
+/// category 3 index 30: sp_get_height
+///
+/// Purpose: Return the PAL logical cell height of a script sprite.  PAL export
+/// `PalSpriteGetHeight` reads sprite offset +0x60.
+///
+/// VM arguments:
+/// - pop[0]: slot (SpriteSlot) — script sprite slot.
+///
+/// Return: integer height in logical pixels.
+///
+/// Side effects: WritesVmMemory.
+///
+/// Evidence:
+/// - PAL.sqlite: PalSpriteGetHeight 0x1011E46E -> PalSpriteGetHeight_0 returns
+///   sprite +0x60.
+/// - RuntimeTrace: pal-vm dispatch_sprite_ext index 30 pops one slot and
+///   returns SpriteSystem::get_height().
+///
+/// Engine: Verified — returns the sprite cell/logical height from the portable
+/// sprite object.
+///
+/// Decompiler: Verified — renders sp_get_height(slot) instead of ext_0003_001E.
+static SIG_SP_GET_HEIGHT: ExtSig = sig!(3, 30, "sp_get_height", pop=1,
+    params=["slot":0=SpriteSlot=>"script sprite slot"],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Return PAL logical/cell sprite height.",
+    status=Verified, decompiler=Verified,
+    evidence=[PalSqlite:"reverse/PAL.sqlite PalSpriteGetHeight 0x1011E46E -> PalSpriteGetHeight_0 returns sprite+0x60", RuntimeTrace:"pal-vm dispatch_sprite_ext index 30 pops slot and returns SpriteSystem::get_height"],
+    pal="PalSpriteGetHeight" => "0x1011E46E");
+/// category 3 index 36: sp_get_scale
+static SIG_SP_GET_SCALE: ExtSig = sig!(3, 36, "sp_get_scale", pop=1,
+    params=["slot":0=SpriteSlot],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Return a sprite scale as a PAL percent value, or -1 when no image exists.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_427940 pops slot and writes summed native scale lanes * 100 to return slot"],
+    game="0x00427940");
+/// category 3 index 37: sp_set_color
+static SIG_SP_SET_COLOR_SPRITE: ExtSig = sig!(3, 37, "sp_set_color", pop=2,
+    params=["slot":0=SpriteSlot, "rgb":1=Color],
+    return=Integer, effects=[MutatesSprite],
+    purpose="Set a sprite RGB color while preserving alpha.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_428120 pops slot/rgb and writes low 24 bits of the color field"],
+    game="0x00428120");
+/// category 3 index 44: sp_set_vis_clip
+static SIG_SP_SET_VIS_CLIP: ExtSig = sig!(3, 44, "sp_set_vis_clip", pop=1,
+    params=["slot":0=SpriteSlot],
+    return=Integer, effects=[MutatesSprite],
+    purpose="Enable the native sprite vis-clip bit.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_424FD0 pops slot and ORs wrapper flag 0x1000000"],
+    game="0x00424FD0");
+/// category 3 index 49: sp_set_child
+static SIG_SP_SET_CHILD: ExtSig = sig!(3, 49, "sp_set_child", pop=5,
+    params=["parent_slot":0=SpriteSlot, "child_slot":1=SpriteSlot, "offset_x":2=CoordinateX, "offset_y":3=CoordinateY, "child_index":4=Integer],
+    return=Integer, effects=[MutatesSprite],
+    purpose="Attach a child sprite lane to a parent sprite.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_424A20 pops parent_slot/child_slot/offset_x/offset_y/child_index and writes child-lane fields"],
+    game="0x00424A20");
+/// category 3 index 50: sp_set_transition
+static SIG_SP_SET_TRANSITION_HOT: ExtSig = sig!(3, 50, "sp_set_transition", pop=4,
+    params=["slot":1=SpriteSlot=>"sprite slot whose image is replaced", "name":0=ResourceStringFromFileDat=>"new File.dat image resource", "transition_id":2=Integer=>"native transition table id", "duration_ms":3=DurationMs=>"transition duration"],
+    return=Integer, effects=[CreatesSprite, MutatesSprite, CreatesTask],
+    purpose="Replace a sprite image and queue a PAL transition from the old image to the new image.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_428F10 pops name/slot/transition/duration, saves old sprite pointer, loads new image, and queues 0x30032 render action", PalSqlite:"PalSpriteSetTransition 0x1011E851 is the PAL transition primitive"],
+    game="0x00428F10", pal="PalSpriteSetTransition" => "0x1011E851");
+/// category 3 index 51: sp_copy_image
+static SIG_SP_COPY_IMAGE_HOT: ExtSig = sig!(3, 51, "sp_copy_image", pop=1,
+    params=["slot":0=SpriteSlot=>"sprite slot whose current image is moved to the transition source lane"],
+    return=Integer, effects=[MutatesSprite],
+    purpose="Move the current sprite image into the wrapper's transition source/copy lane.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_424940 pops slot, cancels active transition, stores current sprite pointer into wrapper old-image lane, and zeros the live pointer"],
+    game="0x00424940");
+/// category 3 index 52: sp_transition
+static SIG_SP_TRANSITION_HOT: ExtSig = sig!(3, 52, "sp_transition", pop=3,
+    params=["slot":0=SpriteSlot=>"sprite slot to transition", "transition_id":1=Integer=>"native transition table id", "duration_ms":2=DurationMs=>"transition duration"],
+    return=Integer, effects=[MutatesSprite, CreatesTask],
+    purpose="Start a PAL transition for the current sprite, using any saved source image lane.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_424790 pops slot/transition/duration, creates transition handle, and queues 0x30032 or skip action", PalSqlite:"PalSpriteSetTransition 0x1011E851 and PalSpriteCancelTransition 0x1011B309"],
+    game="0x00424790", pal="PalSpriteSetTransition" => "0x1011E851");
+/// category 3 index 54: get_backbuffer
+static SIG_SP_GET_BACKBUFFER: ExtSig = sig!(3, 54, "get_backbuffer", pop=1,
+    params=["slot":0=SpriteSlot],
+    return=Integer, effects=[MutatesSprite],
+    purpose="Copy a sprite image into PAL's active backbuffer.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_424620 pops slot and calls PalSpriteBackBafferCopy"],
+    game="0x00424620");
+/// category 3 index 55: sp_set_mask
+///
+/// Purpose: Apply a file-backed alpha mask to an existing PAL sprite surface.
+/// Game.exe stores the nine values in a wrapper mask lane and immediately calls
+/// sub_422FD0, which resolves `mask_resource + ".tga"` and invokes
+/// PalSpriteMaskAlpha(live_sprite, dst_x, dst_y, width, height, mask, mask_x,
+/// mask_y). Coordinates are target/mask surface pixels, not screen coordinates.
+static SIG_SP_SET_MOTION: ExtSig = sig!(3, 55, "sp_set_mask", pop=9,
+    params=["slot":0=SpriteSlot, "dst_x":1=CoordinateX, "dst_y":2=CoordinateY, "width":3=Integer, "height":4=Integer, "mask_resource":5=ResourceStringFromFileDat, "mask_x":6=CoordinateX, "mask_y":7=CoordinateY, "lane":8=Integer],
+    return=Integer, effects=[MutatesSprite, ReadsFile],
+    purpose="Apply an alpha mask resource to a live sprite surface.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_425EF0 pops slot/dst_x/dst_y/width/height/resource/mask_x/mask_y/lane, writes mask lane fields, and calls sub_422FD0; sub_422FD0 calls PalSpriteMaskAlpha", PalSqlite:"PAL.dll PalSpriteMaskAlpha is the target alpha-mask primitive"],
+    game="0x00425EF0");
+/// category 3 index 8: sp_get_filename
+///
+/// Purpose: Copy a sprite slot's current resource filename into a dynamic
+/// string destination and return the native resource id.  Used by title/menu
+/// table helpers to inspect sprite resources.
+static SIG_SP_GET_FILENAME: ExtSig = sig!(3, 8, "sp_get_filename", pop=2,
+    params=["slot":0=SpriteSlot=>"script sprite slot", "dst_slot":1=BufferPointer=>"dynamic string destination"],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Copy sprite resource filename/name to dynamic string storage.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite VmExtcall_SpSet2/sub_4244E0 pops slot and dst string slot, copies sprite filename, returns resource id"],
+    game="0x004244E0");
+/// category 3 index 16: sp_set_render_mode
+///
+/// Purpose: Set the PAL render mode for a sprite.  Native passes mode+1 to
+/// PalSpriteSetRenderMode.
+static SIG_SP_SET_RENDER_MODE: ExtSig = sig!(3, 16, "sp_set_render_mode", pop=2,
+    params=["slot":0=SpriteSlot=>"script sprite slot", "mode":1=Mode=>"native render mode before +1 adjustment"],
+    return=Integer, effects=[MutatesSprite],
+    purpose="Set sprite render/blend mode.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_427530 pops slot/mode and calls PalSpriteSetRenderMode(mode+1)"],
+    game="0x00427530");
+/// category 3 index 28: sp_get_pos_to_mem
+///
+/// Purpose: Write a sprite's composite x/y/z position to up to three Mem.dat
+/// destination indexes; -1 disables an individual destination.
+static SIG_SP_GET_POS_TO_MEM: ExtSig = sig!(3, 28, "sp_get_pos_to_mem", pop=4,
+    params=["slot":0=SpriteSlot=>"script sprite slot", "dst_x":1=BufferPointer=>"Mem.dat destination for x or -1", "dst_y":2=BufferPointer=>"Mem.dat destination for y or -1", "dst_z":3=BufferPointer=>"Mem.dat destination for z or -1"],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Write sprite x/y/z position into Mem.dat destinations.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_427D10 pops slot/dst_x/dst_y/dst_z and writes composite position to Mem.dat when dst != -1"],
+    game="0x00427D10");
+/// category 3 index 31: sp_set_anim2
+///
+/// Purpose: Configure a nine-argument sprite animation/mix-file lane.  Native
+/// stores the lane into sprite state and may call the sprite mix loader.
+static SIG_SP_SET_ANIM2: ExtSig = sig!(3, 31, "sp_set_anim2", pop=9,
+    params=["slot":0=SpriteSlot, "arg1":1=Integer, "arg2":2=Integer, "arg3":3=Integer, "arg4":4=Integer, "resource":5=ResourceStringFromFileDat, "arg6":6=Integer, "arg7":7=Integer, "lane":8=Integer],
+    return=Integer, effects=[MutatesSprite, ReadsFile],
+    purpose="Configure native sprite mix/animation lane with nine parameters.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_4266C0 pops nine values and writes sprite lane fields before sub_422F10"],
+    game="0x004266C0");
+/// category 3 index 19: face_init
+///
+/// Purpose: Initialize one native face table entry.  The latest IDB names the
+/// handler `VmExtcall_SpSetPosEx`, but the decompiled body at 0x004273C0 logs
+/// `face_init` and writes VM offsets +710420..+710432: mapped sprite slot,
+/// priority lane, center x, and center y.
+static SIG_FACE_INIT: ExtSig = sig!(3, 19, "face_init", pop=5,
+    params=["face_id":0=Integer=>"face table index", "sprite_slot":1=SpriteSlot=>"script sprite slot used for this face part", "center_x":2=Coordinate=>"face anchor x or -1", "center_y":3=Coordinate=>"face anchor y or -1", "priority_lane":4=Integer=>"native priority lane stored as -134*lane"],
+    return=Integer, effects=[MutatesSprite],
+    purpose="Initialize a face/part slot mapping and anchor table entry.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_4273C0 pops face_id/sprite_slot/center_x/center_y/priority_lane, writes ctx+710420..710432, and logs face_init"],
+    game="0x004273C0");
+/// category 3 index 20: face_set
+///
+/// Purpose: Replace the image part for a face table entry.  Native pops a
+/// resource id, face id, dx, dy; releases the mapped old sprite; loads the new
+/// PGD; positions it from the face anchor/default image offset; and commits it
+/// through the PAL sprite path.
+static SIG_FACE_SET: ExtSig = sig!(3, 20, "face_set", pop=4,
+    params=["resource":0=ResourceStringFromFileDat=>"PGD/part resource or 0x0fffffff clear sentinel", "face_id":1=Integer=>"face table index", "dx":2=Coordinate=>"x offset from anchor/default", "dy":3=Coordinate=>"y offset from anchor/default"],
+    return=Integer, effects=[MutatesSprite, ReadsFile],
+    purpose="Load or clear a face/standing-picture part through the face table.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_426E50 pops resource/face_id/dx/dy, resolves ctx+710420 face table, releases old sprite, loads resource, computes position, and logs face_set"],
+    game="0x00426E50");
+/// category 3 index 23: face_cls
+///
+/// Purpose: Clear a face table entry's mapped sprite slot.
+static SIG_FACE_CLS: ExtSig = sig!(3, 23, "face_cls", pop=1,
+    params=["face_id":0=Integer=>"face table index"],
+    return=Integer, effects=[MutatesSprite],
+    purpose="Release the sprite currently mapped to a face table entry.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_426DB0 pops face_id, reads ctx+710420[face_id], calls sub_4232E0 on that sprite wrapper, and logs face_cls"],
+    game="0x00426DB0");
+/// category 3 index 34: sp_set_anim_param
+///
+/// Purpose: Store a native per-sprite integer parameter later returned by
+/// sp_get_anim_param.
+static SIG_SP_SET_ANIM_PARAM: ExtSig = sig!(3, 34, "sp_set_anim_param", pop=2,
+    params=["slot":0=SpriteSlot, "value":1=Integer],
+    return=Integer, effects=[MutatesSprite],
+    purpose="Store native sprite parameter at ctx+666396.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_425870 pops slot/value and stores value at ctx+666396 for that slot"],
+    game="0x00425870");
+/// category 3 index 35: sp_get_anim_param
+///
+/// Purpose: Return the per-sprite integer parameter stored by index 34.
+static SIG_SP_GET_ANIM_PARAM: ExtSig = sig!(3, 35, "sp_get_anim_param", pop=1,
+    params=["slot":0=SpriteSlot],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Return native sprite parameter at ctx+666396.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_4257F0 pops slot and writes ctx+666396 slot value to return"],
+    game="0x004257F0");
+/// category 3 index 48: is_sp
+///
+/// Purpose: Return whether a script sprite or motion slot is currently live.
+static SIG_IS_SP: ExtSig = sig!(3, 48, "is_sp", pop=1,
+    params=["slot":0=SpriteSlot],
+    return=Bool, effects=[WritesVmMemory],
+    purpose="Test whether a sprite slot currently exists.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_424CE0 pops slot and returns whether script/motion sprite storage is non-null"],
+    game="0x00424CE0");
+/// category 3 index 56: sp_set_motion_pos
+///
+/// Purpose: Configure a nine-argument sprite bitblt/motion lane.  Native stores
+/// rectangle/resource/lane fields and calls sub_422E10.
+static SIG_SP_SET_MOTION_POS: ExtSig = sig!(3, 56, "sp_set_motion_pos", pop=9,
+    params=["slot":0=SpriteSlot, "arg1":1=Integer, "arg2":2=Integer, "arg3":3=Integer, "arg4":4=Integer, "resource":5=ResourceStringFromFileDat, "arg6":6=Integer, "arg7":7=Integer, "lane":8=Integer],
+    return=Integer, effects=[MutatesSprite, ReadsFile],
+    purpose="Configure native sprite motion/bitblt lane with nine parameters.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_426180 pops nine values and writes sprite lane fields before sub_422E10"],
+    game="0x00426180");
 /// category 3 index 41: sp_set_anim
 ///
 /// Purpose: Attach a named sheet or ANI animation resource to a sprite slot
@@ -733,6 +1277,43 @@ static SIG_SP_SET_ANIM_57: ExtSig = sig!(3, 57, "sp_set_anim", pop=3,
     params=["slot":0=SpriteSlot, "name":1=ResourceStringFromFileDat, "flag":2=Flag],
     return=Void, effects=[MutatesSprite, CreatesTask], purpose="Alias/wrapper for sprite animation setup.",
     status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md 24.13"]);
+/// category 3 index 53: set_aspect_position_type
+///
+/// Purpose: Store the sprite's PAL aspect-position conversion type.  Native
+/// Game.exe writes a small table value into sprite wrapper field 26; the shared
+/// sprite commit path later passes that value to PalSpriteConvertAspectPosition.
+///
+/// VM arguments:
+/// - pop[0]: slot (SpriteSlot) — sprite slot looked up with sub_449120.
+/// - pop[1]: type_index (Mode) — index into xmmword_4A3FC0.  In this build the
+///   table bytes are `[0, 1, 2, 3]`.
+///
+/// Return: status integer.
+///
+/// Side effects: MutatesSprite.
+///
+/// Evidence:
+/// - Game.sqlite: sub_4246C0 pops slot then type_index, writes
+///   dword_4C02A8[189 * wrapper_index] = xmmword_4A3FC0[type_index].
+/// - PAL.sqlite: PalSpriteConvertAspectPosition only adjusts x/y when PAL
+///   aspect-position conversion is enabled and global aspect mode is 3.
+///
+/// Engine: Partial — stores the per-slot type and routes through a centralized
+/// conversion hook; exact PAL letterbox rectangle math is still a no-op until the
+/// portable renderer exposes those rectangles.
+///
+/// Decompiler: Verified — renders both parameters instead of the old zero-arg
+/// fallback.
+static SIG_SP_SET_ASPECT_POSITION_TYPE: ExtSig = sig!(3, 53, "set_aspect_position_type", pop=2,
+    params=[
+        "slot":0=SpriteSlot=>"sprite slot looked up with sub_449120",
+        "type_index":1=Mode=>"index into native table xmmword_4A3FC0 = [0,1,2,3]"
+    ],
+    return=Integer, effects=[MutatesSprite],
+    purpose="Store PAL aspect-position conversion type for a sprite slot.",
+    status=Partial, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_4246C0 pops slot,type_index and writes wrapper field 26", PalSqlite:"reverse/PAL.sqlite PalSpriteConvertAspectPosition_0 consumes the stored type"],
+    game="0x004246C0", pal="PalSpriteConvertAspectPosition" => "0x101215A1");
 /// category 3 index 39: sp_set_shake
 ///
 /// Purpose: Apply a PAL-style shake (vibration) animation to a sprite slot.
@@ -947,6 +1528,78 @@ static SIG_BGM_SET_VOLUME: ExtSig = sig!(4, 2, "bgm_set_volume", pop=1,
 static SIG_BGM_GET_VOLUME: ExtSig = sig!(4, 3, "bgm_get_volume", pop=1,
     params=["slot":0=SoundSlot], return=Integer, effects=[], purpose="Read BGM volume state.",
     status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md audio"]);
+/// category 4 index 6: bgm_set_auto_volume
+///
+/// Purpose: Configure the BGM automatic ducking/auto-volume latch.
+///
+/// VM arguments:
+/// - pop[0]: enabled (Flag) — non-zero enables auto volume behavior.
+/// - pop[1]: volume (Volume) — auto-volume percent cached by Game.exe.
+///
+/// Return: void.
+///
+/// Side effects: ChangesSoundState.
+///
+/// Evidence:
+/// - GameSqlite: `sub_40BFB0` pops two args, stores ctx[165003]/ctx[165004],
+///   and restores normal BGM group volume when disabled.
+static SIG_BGM_SET_AUTO_VOLUME: ExtSig = sig!(4, 6, "bgm_set_auto_volume", pop=2,
+    params=["enabled":0=Flag, "volume":1=Volume], return=Void, effects=[PlaysSound],
+    purpose="Configure BGM automatic volume/ducking state.",
+    status=Blocked, decompiler=Blocked, evidence=[GameSqlite:"reverse/Game.sqlite sub_40BFB0"]);
+/// category 4 index 11: set_master_volume
+///
+/// Purpose: Set the primary/master volume.
+///
+/// VM arguments:
+/// - pop[0]: volume (Volume) — script percent, converted to PAL raw `* 100`.
+///
+/// Return: void.
+///
+/// Evidence: Game.sqlite `sub_40BD40`.
+static SIG_SET_MASTER_VOLUME: ExtSig = sig!(4, 11, "set_master_volume", pop=1,
+    params=["volume":0=Volume], return=Void, effects=[PlaysSound],
+    purpose="Set primary/master volume percent.",
+    status=Blocked, decompiler=Blocked, evidence=[GameSqlite:"reverse/Game.sqlite sub_40BD40"]);
+/// category 4 index 13: mute_master_volume
+///
+/// Purpose: Gate the primary/master volume without changing the configured
+/// slider value.
+///
+/// VM arguments:
+/// - pop[0]: muted (Flag) — non-zero mutes, zero restores.
+///
+/// Return: void.
+///
+/// Evidence: Game.sqlite `sub_40BC70`.
+static SIG_MUTE_MASTER_VOLUME: ExtSig = sig!(4, 13, "mute_master_volume", pop=1,
+    params=["muted":0=Flag], return=Void, effects=[PlaysSound],
+    purpose="Mute/unmute primary volume while preserving configured percent.",
+    status=Blocked, decompiler=Blocked, evidence=[GameSqlite:"reverse/Game.sqlite sub_40BC70"]);
+/// category 4 index 14: bgm_mute
+///
+/// Purpose: Gate BGM group volume without changing the configured BGM slider.
+///
+/// VM arguments:
+/// - pop[0]: muted (Flag) — non-zero mutes, zero restores.
+///
+/// Evidence: Game.sqlite `sub_40C230`.
+static SIG_BGM_MUTE: ExtSig = sig!(4, 14, "bgm_mute", pop=1,
+    params=["muted":0=Flag], return=Void, effects=[PlaysSound],
+    purpose="Mute/unmute BGM group while preserving configured percent.",
+    status=Blocked, decompiler=Blocked, evidence=[GameSqlite:"reverse/Game.sqlite sub_40C230"]);
+/// category 4 index 15: mute_bgm_auto_volume
+///
+/// Purpose: Toggle BGM auto-volume mute/enable latch.
+///
+/// VM arguments:
+/// - pop[0]: muted (Flag) — non-zero disables/gates auto volume.
+///
+/// Evidence: Game.sqlite `sub_40C060`.
+static SIG_MUTE_BGM_AUTO_VOLUME: ExtSig = sig!(4, 15, "mute_bgm_auto_volume", pop=1,
+    params=["muted":0=Flag], return=Void, effects=[ChangesRunState],
+    purpose="Toggle BGM automatic volume mute latch.",
+    status=Blocked, decompiler=Blocked, evidence=[GameSqlite:"reverse/Game.sqlite sub_40C060"]);
 /// category 4 index 9: bgm_load
 ///
 /// Purpose: Preload a BGM resource into a slot without starting playback.
@@ -1071,25 +1724,26 @@ static SIG_SE_STOP: ExtSig = sig!(5, 3, "se_stop", pop=2,
     purpose="Stop SE slot.", status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md audio"]);
 /// category 5 index 4: se_set_volume
 ///
-/// Purpose: Set the volume for a sound effect slot.
+/// Purpose: Set the volume for a sound effect lane.
 ///
 /// VM arguments:
-/// - pop[0]: slot (SoundSlot) — SE slot index.
-/// - pop[1]: volume (Volume) — new volume (0–100).
+/// - pop[0]: volume (Volume) — new volume (0–100).
+/// - pop[1]: slot (SoundSlot) — SE lane index.
 ///
 /// Return: void.
 ///
 /// Side effects: PlaysSound.
 ///
 /// Evidence:
-/// - Writeup: docs/writeup.md audio
+/// - Game.sqlite: `sub_434C50` pops `v4` then `v6`, stores
+///   `cached_volume[v6] = v4 * 100`, and writes through `dword_49C264[v6]`.
 ///
-/// Engine: Blocked — sets SE slot volume.
+/// Engine: Verified — updates the lane cache and projected portable SE group.
 ///
-/// Decompiler: Blocked — renders as se_set_volume(slot, volume).
+/// Decompiler: Verified — renders as se_set_volume(volume, slot).
 static SIG_SE_SET_VOLUME: ExtSig = sig!(5, 4, "se_set_volume", pop=2,
-    params=["slot":0=SoundSlot, "volume":1=Volume], return=Void, effects=[PlaysSound],
-    purpose="Set SE volume.", status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md audio"]);
+    params=["volume":0=Volume, "slot":1=SoundSlot], return=Void, effects=[PlaysSound],
+    purpose="Set SE lane volume.", status=Verified, decompiler=Verified, evidence=[GameSqlite:"reverse/Game.sqlite sub_434C50"]);
 /// category 5 index 5: se_get_volume
 ///
 /// Purpose: Read the current volume of a sound effect slot.
@@ -1110,6 +1764,23 @@ static SIG_SE_SET_VOLUME: ExtSig = sig!(5, 4, "se_set_volume", pop=2,
 static SIG_SE_GET_VOLUME: ExtSig = sig!(5, 5, "se_get_volume", pop=1,
     params=["slot":0=SoundSlot], return=Integer, effects=[],
     purpose="Read SE volume.", status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md audio"]);
+/// category 5 index 14: se_mute
+///
+/// Purpose: Mute/unmute an SE slot or SE group lane.
+///
+/// VM arguments:
+/// - pop[0]: muted (Flag) — non-zero mutes, zero restores.
+/// - pop[1]: slot (SoundSlot) — SE slot/lane.
+///
+/// Return: void.
+///
+/// Evidence: Game.sqlite `sub_434D00` pops `v9` then `v4`, logs
+/// `se_mute %d, %d`, stores `enabled = (v9 == 0)` in the lane latch, and
+/// calls `PalSoundSetVolume(enabled * cached_volume[v4], dword_49C264[v4])`.
+static SIG_SE_MUTE: ExtSig = sig!(5, 14, "se_mute", pop=2,
+    params=["muted":0=Flag, "slot":1=SoundSlot], return=Void, effects=[PlaysSound],
+    purpose="Mute/unmute SE lane while preserving cached SE volume.",
+    status=Verified, decompiler=Verified, evidence=[GameSqlite:"reverse/Game.sqlite sub_434D00"]);
 /// category 13 index 0: voice_play
 ///
 /// Purpose: Play a voice/dialogue audio resource.
@@ -1201,6 +1872,26 @@ static SIG_VOICE_GET_VOLUME: ExtSig = sig!(13, 3, "voice_get_volume", pop=0,
     params=[], return=Integer, effects=[],
     purpose="Read global voice volume.", status=Blocked, decompiler=Blocked,
     evidence=[GameSqlite:"reverse/Game.sqlite sub_4445A0"]);
+/// category 13 index 7: voice_play_fade
+///
+/// Purpose: Set the fade/scheduling value consumed by the following voice-play
+/// setup path.
+///
+/// VM arguments:
+/// - pop[0]: fade_ms (DurationMs) — native stores this at ctx+660028.
+///
+/// Return: status integer.
+///
+/// Evidence: Game.sqlite `sub_444190` pops one value and stores it at
+/// ctx+660028. `reverse/GAME_VM_RE.md` maps category 13 index 7 to
+/// `VmExtcall_VoicePlayFade`; category 13 index 24 is the real
+/// `VmExtcall_VoiceMute`.
+static SIG_VOICE_PLAY_FADE: ExtSig = sig!(13, 7, "voice_play_fade", pop=1,
+    params=["fade_ms":0=DurationMs], return=Integer, effects=[PlaysSound],
+    purpose="Set native voice-play fade/scheduling latch.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_444190 pops one value and writes ctx+660028", Writeup:"reverse/GAME_VM_RE.md category 13 index 7 = VmExtcall_VoicePlayFade"],
+    game="0x00444190");
 /// category 13 index 18: voice_wait
 ///
 /// Purpose: Block the VM until the specified voice slot finishes playback.
@@ -1229,32 +1920,36 @@ static SIG_VOICE_WAIT: ExtSig = sig!(13, 18, "voice_wait", pop=1,
     evidence=[GameSqlite:"reverse/Game.sqlite sub_443800"]);
 /// category 13 index 16: set_voice_autopan_size_over
 ///
-/// Purpose: Configure the voice auto-pan clipping rectangle used by Game.exe
-/// for positional voice panning.
+/// Purpose: Configure one voice auto-pan entry used by Game.exe for positional
+/// voice panning.
 ///
-/// VM arguments (display order: width, height, limit_x, limit_y):
-/// - pop[0]: width (Integer) — pan region width.
-/// - pop[1]: height (Integer) — pan region height.
-/// - pop[2]: limit_x (Integer) — x boundary/limit for auto-pan.
-/// - pop[3]: limit_y (Integer) — y boundary/limit for auto-pan.
+/// VM arguments (display order: slot, target, name, mode):
+/// - pop[0]: slot (Integer) — auto-pan table slot.
+/// - pop[1]: target (Integer) — sprite slot/wrapper target, or -1 for clear.
+/// - pop[2]: name (TextStringFromTextDat) — <=32 byte voice/autopan label.
+/// - pop[3]: mode (Integer) — entry mode; target=-1 and mode=0 clears slot.
 ///
 /// Return: void.
 ///
 /// Side effects: PlaysSound (modifies pan configuration).
 ///
 /// Evidence:
-/// - Game.sqlite: reverse/Game.sqlite voice/autopan wrapper; pal-vm dispatch_text_stub index 64 pops 4
-/// - RuntimeTrace: reachable 000D:0010 appears before voice pan setup
+/// - Game.sqlite: handler 0x004438D0 `VmExtcall_VoiceAutopanSizeOver` pops
+///   slot, target, name, mode; writes ctx+658964+40*slot or clears the 40-byte
+///   entry when target=-1 and mode=0.
+/// - RuntimeTrace: longrun-newgame-ctrl-60000 executes this helper 4991 times.
 ///
-/// Engine: Blocked — pops 4 args; auto-pan state stored internally.
+/// Engine: Verified — pal-vm stores/clears the portable autopan table and
+/// enforces the native 32-byte string guard.
 ///
-/// Decompiler: Blocked — renders 4 args in display order.
+/// Decompiler: Verified — renders 4 args in display order.
 static SIG_VOICE_AUTOPAN_SIZE_OVER: ExtSig = sig!(13, 16, "set_voice_autopan_size_over", pop=4,
-    params=["width":0=Integer, "height":1=Integer, "limit_x":2=Integer, "limit_y":3=Integer],
+    params=["slot":0=Integer, "target":1=Integer, "name":2=TextStringFromTextDat, "mode":3=Integer],
     return=Void, effects=[PlaysSound],
-    purpose="Configure the voice auto-pan size/threshold used by Game.exe voice positioning.",
-    status=Blocked, decompiler=Blocked,
-    evidence=[GameSqlite:"reverse/Game.sqlite voice/autopan wrapper; pal-vm dispatch_text_stub index 64 pops 4", RuntimeTrace:"reachable 000D:0010 appears before voice pan setup"]);
+    purpose="Configure or clear one native voice auto-pan table entry.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"0x004438D0 VmExtcall_VoiceAutopanSizeOver pops slot,target,name,mode and mutates ctx+658964+40*slot", RuntimeTrace:"longrun-newgame-ctrl-60000 executes set_voice_autopan_size_over 4991 times"],
+    game="0x004438D0");
 
 // Category 7 - waits. These block only via TaskSystem, not through text calls.
 
@@ -1290,32 +1985,35 @@ static SIG_WAIT: ExtSig = sig!(7, 0, "wait", pop=2,
     game="0x00444F40");
 /// category 7 index 1: wait_click
 ///
-/// Purpose: Wait for player input.  duration_ms=-1 waits for click/key only;
-/// non-negative values create a click-or-timeout wait.
+/// Purpose: Wait for player input or advance a native text task.  duration_ms
+/// -1 is a special text-task completion shortcut; 0 is normalized to a short
+/// wait; positive values create a click-or-timeout wait.
 ///
 /// VM arguments:
-/// - pop[0]: duration_ms (DurationMs) — timeout in ms, or <= 0 for click-only.
+/// - pop[0]: duration_ms (DurationMs) — -1 completes the active text task,
+///   0 becomes a one-tick wait, positive values are timeout ms.
 ///
 /// Return: void.
 ///
-/// Side effects: CreatesTask, BlocksScript.
+/// Side effects: CreatesTask, BlocksScript, ChangesTextState.
 ///
 /// Evidence:
 /// - Game.sqlite: sub_444DE0 pops duration; runtime traces through the title
-///   path show 0 is used as the persistent click/key wait path, while positive
-///   values record a click-or-timeout wait, rewind PC, and return 1.
-/// - RuntimeTrace: pal-vm dispatch_wait_ext index 1 pops duration and emits
-///   Click or ClickOrTime wait.
+///   values record a click-or-timeout wait, rewind PC, and return 1.  The -1
+///   branch clears the text flag at ctx[1050] or calls sub_43A860, then calls
+///   sub_44A010 and returns without rewinding.
+/// - RuntimeTrace: pal-vm dispatch_wait_ext index 1 pops duration and gates
+///   the portable text reveal/click path.
 ///
-/// Engine: Verified — emits WaitRequest::Click for non-positive durations or
-/// ClickOrTime for positive duration.
+/// Engine: Verified — completes text reveal for -1 and emits ClickOrTime for
+/// non-negative durations.
 ///
 /// Decompiler: Verified — renders as wait_click(duration_ms).
 static SIG_WAIT_CLICK: ExtSig = sig!(7, 1, "wait_click", pop=1,
-    params=["duration_ms":0=DurationMs], return=Void, effects=[CreatesTask, BlocksScript],
-    purpose="Non-positive durations wait for input only; positive values are click-or-time waits.",
+    params=["duration_ms":0=DurationMs], return=Void, effects=[CreatesTask, BlocksScript, ChangesTextState],
+    purpose="-1 completes the active text task; non-negative values are click-or-time waits.",
     status=Verified, decompiler=Verified,
-    evidence=[GameSqlite:"reverse/Game.sqlite sub_444DE0 pops duration and implements wait_click timeout/click-only semantics", RuntimeTrace:"pal-vm dispatch_wait_ext index 1 returns Click for <=0 or ClickOrTime for positive waits"],
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_444DE0 pops duration; -1 clears/completes text task via ctx[1050]/sub_43A860/sub_44A010; non-negative values rewind until click/timeout", RuntimeTrace:"pal-vm dispatch_wait_ext index 1 gates the portable text reveal/click path"],
     game="0x00444DE0");
 /// category 7 index 2: wait_sync_begin
 ///
@@ -1329,14 +2027,17 @@ static SIG_WAIT_CLICK: ExtSig = sig!(7, 1, "wait_click", pop=1,
 /// Side effects: CreatesTask.
 ///
 /// Evidence:
-/// - Writeup: docs/writeup.md wait
+/// - Game.sqlite/writeup: recovered wait-sync fields at VM offsets
+///   +655244/+655248.
+/// - RuntimeTrace: pal-vm stores cached PAL time on index 2.
 ///
-/// Engine: Blocked — records sync start timestamp.
+/// Engine: Verified — records sync start timestamp and clears a pending
+/// release wait.
 ///
-/// Decompiler: Blocked — renders as wait_sync_begin().
+/// Decompiler: Verified — renders as wait_sync_begin().
 static SIG_WAIT_SYNC_BEGIN: ExtSig = sig!(7, 2, "wait_sync_begin", pop=0, params=[],
     return=Void, effects=[CreatesTask], purpose="Begin PAL wait-sync timing scope.",
-    status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md wait"]);
+    status=Verified, decompiler=Verified, evidence=[GameSqlite:"docs/writeup.md wait-sync offsets +655244/+655248 from Game.sqlite", RuntimeTrace:"pal-vm dispatch_wait_ext index 2 stores pal_time_ms"]);
 /// category 7 index 3: wait_sync_release
 ///
 /// Purpose: End a wait-sync scope and block until the elapsed time since
@@ -1350,14 +2051,17 @@ static SIG_WAIT_SYNC_BEGIN: ExtSig = sig!(7, 2, "wait_sync_begin", pop=0, params
 /// Side effects: CreatesTask, BlocksScript.
 ///
 /// Evidence:
-/// - Writeup: docs/writeup.md wait
+/// - Game.sqlite/writeup: recovered wait-sync duration/start fields at
+///   +655244/+655248.
+/// - RuntimeTrace: pal-vm emits a timed WaitRequest and resumes after elapsed
+///   duration.
 ///
-/// Engine: Blocked — computes remaining time and emits a timed WaitRequest.
+/// Engine: Verified — computes remaining time and emits a timed WaitRequest.
 ///
-/// Decompiler: Blocked — renders as wait_sync_release(duration_ms).
+/// Decompiler: Verified — renders as wait_sync_release(duration_ms).
 static SIG_WAIT_SYNC_RELEASE: ExtSig = sig!(7, 3, "wait_sync_release", pop=1,
     params=["duration_ms":0=DurationMs], return=Void, effects=[CreatesTask, BlocksScript],
-    purpose="Release wait-sync with timed block.", status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md wait"]);
+    purpose="Release wait-sync with timed block.", status=Verified, decompiler=Verified, evidence=[GameSqlite:"docs/writeup.md wait-sync offsets +655244/+655248 from Game.sqlite", RuntimeTrace:"pal-vm wait_sync_release blocks until elapsed duration"]);
 /// category 7 index 4: wait_sync_end
 ///
 /// Purpose: Close a wait-sync timing scope without blocking.
@@ -1369,17 +2073,19 @@ static SIG_WAIT_SYNC_RELEASE: ExtSig = sig!(7, 3, "wait_sync_release", pop=1,
 /// Side effects: none (timing scope metadata only).
 ///
 /// Evidence:
-/// - Writeup: docs/writeup.md wait
+/// - Game.sqlite/writeup: recovered wait-sync fields at VM offsets
+///   +655244/+655248.
 ///
-/// Engine: Blocked — resets sync timestamp.
+/// Engine: Verified — resets sync timestamp and pending release state.
 ///
-/// Decompiler: Blocked — renders as wait_sync_end().
+/// Decompiler: Verified — renders as wait_sync_end().
 static SIG_WAIT_SYNC_END: ExtSig = sig!(7, 4, "wait_sync_end", pop=0, params=[],
-    return=Void, effects=[], purpose="End wait-sync timing scope.", status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md wait"]);
+    return=Void, effects=[], purpose="End wait-sync timing scope.", status=Verified, decompiler=Verified, evidence=[GameSqlite:"docs/writeup.md wait-sync offsets +655244/+655248 from Game.sqlite", RuntimeTrace:"pal-vm dispatch_wait_ext index 4 clears wait-sync state"]);
 /// category 7 index 5: wait_sync_step
 ///
-/// Purpose: One-frame wait fence used inside script animation loops to yield
-/// control for exactly one render frame.
+/// Purpose: One-frame wait/work fence used inside script animation loops.  The
+/// Game handler only marks the native sync-step flag; the portable runtime
+/// yields one rendered frame for the same observable script pacing.
 ///
 /// VM arguments: none.
 ///
@@ -1387,15 +2093,12 @@ static SIG_WAIT_SYNC_END: ExtSig = sig!(7, 4, "wait_sync_end", pop=0, params=[],
 ///
 /// Side effects: CreatesTask, BlocksScript.
 ///
-/// Evidence:
-/// - Writeup: docs/writeup.md wait
-///
-/// Engine: Blocked — emits WaitRequest::Frame(1).
-///
-/// Decompiler: Blocked — renders as wait_sync_step().
+/// Evidence: Game.sqlite sub_444AC0 sets the native field at ctx+804084 to 1
+/// and returns success without popping arguments or resetting the sync timer.
 static SIG_WAIT_SYNC_STEP: ExtSig = sig!(7, 5, "wait_sync_step", pop=0, params=[],
-    return=Void, effects=[CreatesTask, BlocksScript], purpose="One-frame wait fence used by script animation loops.",
-    status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md wait"]);
+    return=Void, effects=[CreatesTask, BlocksScript], purpose="One-frame wait/work fence used by script animation loops.",
+    status=Verified, decompiler=Verified, evidence=[GameSqlite:"reverse/Game.sqlite sub_444AC0 sets ctx+804084=1 and returns 1"],
+    game="0x00444AC0");
 /// category 7 index 7: wait_click_no_anim
 ///
 /// Purpose: Input wait without triggering the wait-icon animation; otherwise
@@ -1435,13 +2138,14 @@ static SIG_WAIT_CLICK_NO_ANIM: ExtSig = sig!(7, 7, "wait_click_no_anim", pop=1,
 /// Side effects: none.
 ///
 /// Evidence:
-/// - Writeup: docs/writeup.md wait
+/// - Game.sqlite/writeup: recovered begin timestamp field at +655248.
+/// - RuntimeTrace: pal-vm returns cached PAL time delta.
 ///
-/// Engine: Blocked — returns elapsed ms since last sync_begin.
+/// Engine: Verified — returns elapsed ms since last sync_begin.
 ///
-/// Decompiler: Blocked — renders as wait_sync_get_time().
+/// Decompiler: Verified — renders as wait_sync_get_time().
 static SIG_WAIT_SYNC_GET_TIME: ExtSig = sig!(7, 8, "wait_sync_get_time", pop=0, params=[],
-    return=Integer, effects=[], purpose="Read elapsed PAL wait-sync time.", status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md wait"]);
+    return=Integer, effects=[], purpose="Read elapsed PAL wait-sync time.", status=Verified, decompiler=Verified, evidence=[GameSqlite:"docs/writeup.md wait-sync begin timestamp +655248 from Game.sqlite", RuntimeTrace:"pal-vm dispatch_wait_ext index 8 returns pal_time_ms - wait_sync_begin_ms"]);
 /// category 7 index 9: wait_time_push
 ///
 /// Purpose: Push current PAL wait-time state onto an internal stack, allowing
@@ -1539,6 +2243,30 @@ static SIG_SELECT_SET: ExtSig = sig!(6, 2, "select_set", pop=6,
     purpose="Register one selectable option with target/process metadata.",
     status=Blocked, decompiler=Blocked,
     evidence=[GameSqlite:"reverse/Game.sqlite select handler; pal-vm dispatch_select_stub index 2 pops 6", RuntimeTrace:"select_option text/target/pos/color/flags"]);
+/// category 6 index 3: select_commit
+///
+/// Purpose: Commit/refresh the current select option list.  Native consumes no
+/// arguments; later select input/query handlers use the current option table.
+///
+/// VM arguments: none.
+///
+/// Return: void.
+///
+/// Side effects: ChangesSelectState.
+///
+/// Evidence:
+/// - RuntimeTrace: reachable 0006:0003 follows select_set sequences.
+/// - pal-vm: dispatch_select_stub index 3 pops zero args and logs option count.
+///
+/// Engine: Blocked — records the commit boundary for select state.
+///
+/// Decompiler: Blocked — renders as select_commit().
+static SIG_SELECT_COMMIT: ExtSig = sig!(6, 3, "select_commit", pop=0,
+    params=[],
+    return=Void, effects=[ChangesSelectState],
+    purpose="Commit/refresh the current select option list.",
+    status=Blocked, decompiler=Blocked,
+    evidence=[RuntimeTrace:"reachable 0006:0003 follows select_set sequences", Disassembly:"out/extcall_report.json reachable extcall 0006:0003"]);
 /// category 6 index 4: select_clear
 ///
 /// Purpose: Clear all registered select/menu options and reset menu state.
@@ -1572,8 +2300,10 @@ static SIG_SELECT_CLEAR: ExtSig = sig!(6, 4, "select_clear", pop=0,
 ///
 /// VM arguments:
 /// - pop[0]: group (ButtonSlot) — button group index to initialize.
-/// - pop[1]: arg1 (Unknown) — configuration argument; purpose not reversed.
-/// - pop[2]: arg2 (Unknown) — configuration argument; purpose not reversed.
+/// - pop[1]: normal_image (ResourceStringFromFileDat) — optional normal group
+///   image resource, or 0x0FFFFFFF sentinel.
+/// - pop[2]: hover_image (ResourceStringFromFileDat) — optional hover group
+///   image resource, or 0x0FFFFFFF sentinel.
 ///
 /// Return: void.
 ///
@@ -1583,17 +2313,17 @@ static SIG_SELECT_CLEAR: ExtSig = sig!(6, 4, "select_clear", pop=0,
 /// - Disassembly: docs/dis.txt category 8
 /// - RuntimeTrace: pal-vm ext_btn_init pops 3
 ///
-/// Engine: Blocked — pops 3 args; group is initialized.
+/// Engine: Verified — stores a portable button-group record with normal/hover
+/// image ids and clears stale queued reactions for the group.
 ///
-/// Decompiler: Blocked — renders as btn_init(group, arg1, arg2).
-///
-/// Open points: Meaning of arg1 and arg2 not reversed.
+/// Decompiler: Verified — renders as btn_init(group, normal_image, hover_image).
 static SIG_BTN_INIT: ExtSig = sig!(8, 0, "btn_init", pop=3,
-    params=["group":0=ButtonSlot, "arg1":1=Unknown, "arg2":2=Unknown],
-    return=Void, effects=[ChangesSelectState],
-    purpose="Initialize a button group; runtime pops 3 args (group + 2 unknown config args).",
-    status=Blocked, decompiler=Blocked,
-    evidence=[Disassembly:"docs/dis.txt category 8", RuntimeTrace:"pal-vm ext_btn_init pops 3"]);
+    params=["group":0=ButtonSlot=>"button group", "normal_image":1=ResourceStringFromFileDat=>"normal group image or sentinel", "hover_image":2=ResourceStringFromFileDat=>"hover group image or sentinel"],
+    return=Integer, effects=[ChangesSelectState],
+    purpose="Initialize a native PAL button group with normal/hover image resources.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_40FC60 pops group/normal_image/hover_image and calls PalButtonCreateEx", RuntimeTrace:"pal-vm ext_btn_init stores button group state"],
+    game="0x0040FC60");
 /// category 8 index 1: btn_uninit
 ///
 /// Purpose: Release all buttons belonging to the specified group.
@@ -1952,33 +2682,35 @@ static SIG_BTN_SET_ALPHA: ExtSig = sig!(8, 16, "btn_set_alpha_0x", pop=3,
     game="0x0040E4B0", pal="PalSpriteSetColor" => "0x10119103");
 /// category 8 index 21: btn_set_anim
 ///
-/// Purpose: Select the animation cell/state for an already-registered button
-/// sprite.  Controls multi-frame button animations.
+/// Purpose: Bind/play an animation resource for an already-registered button
+/// sprite.  Native resolves the resource string and attaches the resulting ANI
+/// task to the button sprite wrapper.
 ///
 /// VM arguments (display order: group, index, anim_id, state):
 /// - pop[0]: group (ButtonSlot) — button group index.
 /// - pop[1]: index (ButtonSlot) — button index within group.
-/// - pop[2]: anim_id (Integer) — animation identifier or cell index.
-/// - pop[3]: state (Mode) — animation state/channel selector.
+/// - pop[2]: anim_resource (ResourceStringFromFileDat) — ANI/File.dat resource id.
+/// - pop[3]: play_flag (Flag) — non-zero queues animation update work.
 ///
 /// Return: void.
 ///
 /// Side effects: MutatesSprite, ChangesSelectState.
 ///
 /// Evidence:
-/// - Game.sqlite: reverse/Game.sqlite button animation state path
-/// - PAL.sqlite: PalSpriteRectSetPos 0x1011E865
-/// - RuntimeTrace: pal-vm ext_btn_set_anim pops 4
+/// - Game.sqlite: sub_40DE40 pops group/index/resource/play_flag, resolves the
+///   resource through sub_44B1E0, calls sub_447440, and queues animation work
+///   when play_flag is non-zero.
 ///
-/// Engine: Blocked — sets button animation frame/state.
+/// Engine: Blocked — binds supported named ANI resources to portable button sprites.
 ///
-/// Decompiler: Blocked — renders as btn_set_anim(group, index, anim_id, state).
+/// Decompiler: Blocked — renders as btn_set_anim(group, index, anim_resource, play_flag).
 static SIG_BTN_SET_ANIM: ExtSig = sig!(8, 21, "btn_set_anim", pop=4,
-    params=["group":0=ButtonSlot, "index":1=ButtonSlot, "anim_id":2=Integer, "state":3=Mode],
+    params=["group":0=ButtonSlot, "index":1=ButtonSlot, "anim_resource":2=ResourceStringFromFileDat, "play_flag":3=Flag],
     return=Void, effects=[MutatesSprite, ChangesSelectState],
-    purpose="Select button animation/cell state for an already registered button.",
+    purpose="Bind/play button animation resource for an already registered button.",
     status=Blocked, decompiler=Blocked,
-    evidence=[GameSqlite:"reverse/Game.sqlite button animation state path", PalSqlite:"PalSpriteRectSetPos 0x1011E865", RuntimeTrace:"pal-vm ext_btn_set_anim pops 4"]);
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_40DE40 pops group/index/resource/play_flag, resolves the resource with sub_44B1E0, calls sub_447440, and queues animation work"],
+    game="0x0040DE40");
 /// category 8 index 22: btn_set_hit
 ///
 /// Purpose: Bind/update the native PAL reaction target for a concrete button
@@ -2042,6 +2774,34 @@ static SIG_BTN_GET_PUSH: ExtSig = sig!(8, 17, "btn_get_push", pop=1,
     status=Verified, decompiler=Verified,
     evidence=[GameSqlite:"reverse/Game.sqlite sub_40CDE0 calls PalButtonGetReaction and mutates script reaction state", PalSqlite:"PalButtonGetReaction 0x1011E1D0 / Game import thunk 0x45029E", RuntimeTrace:"pal-vm ext_btn_get_push pops group and returns clicked index or 0"],
     game="0x0040CDE0", pal="PalButtonGetReaction" => "0x1011E1D0");
+/// category 8 index 23: btn_get_onmouse
+///
+/// Purpose: Return the current hover/onmouse button index for a group.
+///
+/// VM arguments:
+/// - pop[0]: group (ButtonSlot) — button group to query.
+///
+/// Return: Integer — hovered button index, or 0 when none.
+///
+/// Side effects: ChangesSelectState — native returns a cached group field;
+/// portable runtime refreshes it from live hit testing.
+///
+/// Evidence:
+/// - Game.sqlite: sub_40E3B0 pops one group and returns
+///   `*(ctx + 4512 * group + 12996)`.
+/// - RuntimeTrace: pal-vm ext_btn_get_onmouse pops group and returns the live
+///   hit-test/onmouse cache.
+///
+/// Engine: Verified — computes and caches group hover index.
+///
+/// Decompiler: Verified — renders as btn_get_onmouse(group).
+static SIG_BTN_GET_ONMOUSE: ExtSig = sig!(8, 23, "btn_get_onmouse", pop=1,
+    params=["group":0=ButtonSlot=>"button group"],
+    return=Integer, effects=[ChangesSelectState],
+    purpose="Return current hover/onmouse button index for a group.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_40E3B0 pops group and returns ctx + 4512*group + 12996", RuntimeTrace:"pal-vm ext_btn_get_onmouse pops group and hit-tests current mouse"],
+    game="0x0040E3B0");
 /// category 8 index 19: btn_lock
 ///
 /// Purpose: Lock input for a button group and optionally start a native lock
@@ -2100,34 +2860,484 @@ static SIG_BTN_UNLOCK: ExtSig = sig!(8, 20, "btn_unlock", pop=1,
     evidence=[GameSqlite:"reverse/Game.sqlite sub_40E040 pops group and clears native button lock fields", RuntimeTrace:"pal-vm ext_btn_unlock pops group and unlocks matching entries"],
     game="0x0040E040");
 
-/// category 9 index 9: font_system_query_9
+/// category 9 index 0: skip_set
 ///
-/// Purpose: Zero-argument font/system query used during the settings/system
-/// submenu setup path.  The script at docs/dis.txt 0002D3DC calls it without
-/// any preceding push and writes the return value to dst_slot[1].
+/// Purpose: Set the ADV skip latch at text context offset +804248 and update
+/// the native skip button row when a text window is bound.
+static SIG_SKIP_SET: ExtSig = sig!(9, 0, "skip_set", pop=1,
+    params=["enabled":0=Flag=>"nonzero enables native ADV skip latch"],
+    return=Integer, effects=[ChangesTextState, ChangesSelectState],
+    purpose="Set the ADV text skip latch.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_438C40 pops enabled, writes byte ctx+804248, updates skip button row through PalButtonSetPos"],
+    game="0x00438C40");
+/// category 9 index 1: skip_is
+///
+/// Purpose: Return the current ADV skip latch stored at text context +804248.
+static SIG_SKIP_IS: ExtSig = sig!(9, 1, "skip_is", pop=0,
+    params=[], return=Integer, effects=[WritesVmMemory],
+    purpose="Return the ADV text skip latch.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_438C00 writes unsigned byte ctx+804248 to the extcall destination"],
+    game="0x00438C00");
+/// category 9 index 2: auto_set
+///
+/// Purpose: Set the ADV auto latch at text context offset +804252 and update
+/// the native auto button row when a text window is bound.
+static SIG_AUTO_SET: ExtSig = sig!(9, 2, "auto_set", pop=1,
+    params=["enabled":0=Flag=>"nonzero enables auto-advance after text reveal"],
+    return=Integer, effects=[ChangesTextState, ChangesSelectState],
+    purpose="Set the ADV text auto latch.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_438A90 pops enabled, writes ctx+804252, updates auto button row through PalButtonSetPos"],
+    game="0x00438A90");
+/// category 9 index 3: auto_is
+///
+/// Purpose: Return the current ADV auto latch stored at text context +804252.
+static SIG_AUTO_IS: ExtSig = sig!(9, 3, "auto_is", pop=0,
+    params=[], return=Integer, effects=[WritesVmMemory],
+    purpose="Return the ADV text auto latch.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_438A50 writes ctx+804252 to the extcall destination"],
+    game="0x00438A50");
+
+/// category 9 index 4: auto_set_speed
+///
+/// Purpose: Store the PAL text auto/typewriter speed percentage in the global
+/// task data block.  Native clamps values above 100 before writing offset +28.
+///
+/// VM arguments:
+/// - pop[0]: speed_percent (Integer) — text timing percent clamped to 0..100.
+///
+/// Return: status integer.
+///
+/// Side effects: ChangesTextState.
+///
+/// Evidence:
+/// - Game.sqlite: sub_4389F0 pops one value, clamps it to 100, and writes
+///   PalTaskGetTaskData(0)+28.
+/// - RuntimeTrace/Disassembly: callsites push config values before 9:4.
+///
+/// Engine: Verified — pops one value and records the clamped speed.
+///
+/// Decompiler: Verified — renders as auto_set_speed(speed_percent).
+static SIG_AUTO_SET_SPEED: ExtSig = sig!(9, 4, "auto_set_speed", pop=1,
+    params=["speed_percent":0=Integer=>"text timing percent clamped to 0..100"],
+    return=Integer, effects=[ChangesTextState],
+    purpose="Set PAL text auto/typewriter speed percent.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_4389F0 pops speed, clamps >100, writes PalTaskGetTaskData(0)+28", Disassembly:"docs/dis.txt 00039628 pushes config value before ext_0009_0004"],
+    game="0x004389F0");
+/// category 9 index 6: window_change_mode
+///
+/// Purpose: Request a PAL window mode change and cache the selected mode in
+/// task data offset +8.
+///
+/// VM arguments:
+/// - pop[0]: mode (Mode) — PAL window mode posted through PalWindowChangeMode.
+///
+/// Return: status integer.
+///
+/// Side effects: MutatesWindow.
+///
+/// Evidence:
+/// - Game.sqlite: sub_438950 pops one mode, calls PalWindowChangeMode(mode),
+///   and stores mode at PalTaskGetTaskData(0)+8.
+/// - PAL.sqlite: PalWindowChangeMode posts the portable-equivalent window
+///   request message.
+static SIG_WINDOW_CHANGE_MODE: ExtSig = sig!(9, 6, "window_change_mode", pop=1,
+    params=["mode":0=Mode=>"PAL window mode"],
+    return=Integer, effects=[MutatesWindow],
+    purpose="Request a PAL window mode change.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_438950 calls PalWindowChangeMode(mode)", PalSqlite:"reverse/PAL.sqlite PalWindowChangeMode 0x101194A5 -> PalWindowChangeMode_0 posts message 0x8065"],
+    game="0x00438950", pal="PalWindowChangeMode" => "0x101194A5");
+/// category 9 index 7: window_set_mode_cache
+///
+/// Purpose: Store the current logical window mode in task data offset +12
+/// without posting a PAL window-change message.
+///
+/// VM arguments:
+/// - pop[0]: mode (Mode) — cached window/layout mode.
+///
+/// Return: status integer.
+///
+/// Side effects: MutatesWindow.
+///
+/// Evidence: Game.sqlite sub_4388F0 pops one value and stores it at
+/// PalTaskGetTaskData(0)+12.
+static SIG_WINDOW_SET_MODE_CACHE: ExtSig = sig!(9, 7, "window_set_mode_cache", pop=1,
+    params=["mode":0=Mode=>"cached window/layout mode"],
+    return=Integer, effects=[MutatesWindow],
+    purpose="Cache logical window mode without posting a window-change message.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_4388F0 pops mode and writes PalTaskGetTaskData(0)+12"],
+    game="0x004388F0");
+/// category 9 index 8: effect_enable
+///
+/// Purpose: Enable or disable PAL visual effects and store the same flag in task
+/// data offset +16.
+///
+/// VM arguments:
+/// - pop[0]: enabled (Flag) — non-zero enables PAL effects.
+///
+/// Return: status integer.
+///
+/// Side effects: ChangesRunState, MutatesWindow.
+///
+/// Evidence:
+/// - Game.sqlite: sub_438890 pops enabled, calls PalEffectEnable(enabled), and
+///   writes task data +16.
+/// - PAL.sqlite: PalEffectEnable_0 writes Block[277].
+static SIG_EFFECT_ENABLE: ExtSig = sig!(9, 8, "effect_enable", pop=1,
+    params=["enabled":0=Flag=>"non-zero enables PAL effects"],
+    return=Integer, effects=[ChangesRunState, MutatesWindow],
+    purpose="Enable or disable PAL visual effects.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_438890 pops flag, calls PalEffectEnable, writes PalTaskGetTaskData(0)+16", PalSqlite:"reverse/PAL.sqlite PalEffectEnable 0x1011C119 -> PalEffectEnable_0 writes Block[277]"],
+    game="0x00438890", pal="PalEffectEnable" => "0x1011C119");
+/// category 9 index 9: effect_enable_is
+///
+/// Purpose: Query PAL effect-enable state for script conditionals.
 ///
 /// VM arguments: none.
 ///
-/// Return: Integer — compatible runtime currently returns 0, matching the old
-/// observed fallback value but without corrupting the VM stack.
+/// Return: bool integer from PalEffectEnableIs.
 ///
 /// Side effects: none.
 ///
 /// Evidence:
-/// - Disassembly: docs/dis.txt 0002D3B0..0002D404 has no push before
-///   ext_0009_0009 and then passes `!result` to ext_0009_0006.
-/// - RuntimeTrace: previous auto fallback popped one stale value every submenu
-///   frame, shrinking the stack and breaking system/load/save UI control flow.
-///
-/// Engine: Verified — pops zero args and returns 0.
-///
-/// Decompiler: Verified — renders as font_system_query_9().
-static SIG_FONT_SYSTEM_QUERY_9: ExtSig = sig!(9, 9, "font_system_query_9", pop=0,
+/// - Game.sqlite: sub_438810 writes PalEffectEnableIs() into the extcall return
+///   destination and pops no arguments.
+/// - PAL.sqlite: PalEffectEnableIs_0 returns Block[277].
+static SIG_EFFECT_ENABLE_IS: ExtSig = sig!(9, 9, "effect_enable_is", pop=0,
     params=[],
-    return=Integer, effects=[],
-    purpose="Zero-argument font/system query used by submenu setup; returns a compatibility integer without touching stack.",
+    return=Bool, effects=[],
+    purpose="Query whether PAL visual effects are enabled.",
     status=Verified, decompiler=Verified,
-    evidence=[Disassembly:"docs/dis.txt 0002D3DC calls ext_0009_0009 with no pushed arguments", RuntimeTrace:"DEBUG_VM showed one-value stack leak from the old auto fallback"]);
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_438810 returns PalEffectEnableIs with no pops", PalSqlite:"reverse/PAL.sqlite PalEffectEnableIs 0x101195A9 -> PalEffectEnableIs_0 returns Block[277]"],
+    game="0x00438810", pal="PalEffectEnableIs" => "0x101195A9");
+/// category 9 index 10: window_get_mode_cache
+///
+/// Purpose: Return the cached logical window/layout mode stored by
+/// window_set_mode_cache.
+///
+/// VM arguments: none.
+///
+/// Return: integer mode.
+///
+/// Side effects: WritesVmMemory.
+///
+/// Evidence: Game.sqlite sub_438830 returns PalTaskGetTaskData(0)+12.
+static SIG_WINDOW_GET_MODE_CACHE: ExtSig = sig!(9, 10, "window_get_mode_cache", pop=0,
+    params=[],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Return cached logical window/layout mode.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_438830 writes PalTaskGetTaskData(0)+12 to dst_slot"],
+    game="0x00438830");
+/// category 9 index 18: input_key_cancel
+///
+/// Purpose: Cancel/clear selected PAL input key masks.
+///
+/// VM arguments:
+/// - pop[0]: key_mask (Integer) — keyboard mask.
+/// - pop[1]: mouse_mask (Integer) — mouse mask.
+///
+/// Return: status integer.
+///
+/// Side effects: ChangesSelectState.
+///
+/// Evidence:
+/// - Game.sqlite: sub_437E70 pops two values and calls
+///   PalInputKeyCancel(key_mask, mouse_mask).
+/// - PAL.sqlite: PalInputKeyCancel_0 removes those masks from PAL input state.
+static SIG_INPUT_KEY_CANCEL: ExtSig = sig!(9, 18, "input_key_cancel", pop=2,
+    params=["key_mask":0=Integer=>"keyboard mask", "mouse_mask":1=Integer=>"mouse mask"],
+    return=Integer, effects=[ChangesSelectState],
+    purpose="Cancel selected PAL input key/mouse masks.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_437E70 pops key_mask,mouse_mask and calls PalInputKeyCancel", PalSqlite:"reverse/PAL.sqlite PalInputKeyCancel 0x1011F56C -> PalInputKeyCancel_0 masks PAL input state"],
+    game="0x00437E70", pal="PalInputKeyCancel" => "0x1011F56C");
+/// category 9 index 17: set_language
+///
+/// Purpose: Set PAL font type/language and rebuild cached text sprites when
+/// native font resources are available.
+///
+/// VM arguments:
+/// - pop[0]: font_type (Mode) — PAL font type passed to PalFontSetType.
+///
+/// Return: status integer.
+///
+/// Side effects: MutatesWindow.
+///
+/// Evidence: Game.sqlite sub_438090 pops one value, calls PalFontSetType, then
+/// conditionally repaints cached text resources; PAL.sqlite PalFontSetType_0
+/// stores Block[232].
+static SIG_SET_LANGUAGE: ExtSig = sig!(9, 17, "set_language", pop=1,
+    params=["font_type":0=Mode=>"PAL font type/language id"],
+    return=Integer, effects=[MutatesWindow],
+    purpose="Set PAL font type/language.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_438090 pops font_type and calls PalFontSetType", PalSqlite:"reverse/PAL.sqlite PalFontSetType 0x1011C4A2 -> PalFontSetType_0 stores Block[232]"],
+    game="0x00438090", pal="PalFontSetType" => "0x1011C4A2");
+/// category 9 index 19: set_font_color
+///
+/// Purpose: Set PAL shared UI font primary/effect colors.
+///
+/// VM arguments:
+/// - pop[0]: text_color (Color) — primary color.
+/// - pop[1]: effect_color (Color) — effect/outline color.
+///
+/// Return: status integer.
+///
+/// Side effects: MutatesWindow.
+///
+/// Evidence: Game.sqlite sub_437F30 pops two values and calls PalFontSetColor;
+/// PAL.sqlite PalFontSetColor_0 stores Block[113]/Block[114].
+static SIG_SET_FONT_COLOR: ExtSig = sig!(9, 19, "set_font_color", pop=2,
+    params=["text_color":0=Color=>"primary font color", "effect_color":1=Color=>"effect/outline color"],
+    return=Integer, effects=[MutatesWindow],
+    purpose="Set PAL shared UI font colors.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_437F30 pops text_color,effect_color and calls PalFontSetColor", PalSqlite:"reverse/PAL.sqlite PalFontSetColor 0x101214F7 -> PalFontSetColor_0 stores Block[113]/Block[114]"],
+    game="0x00437F30", pal="PalFontSetColor" => "0x101214F7");
+/// category 9 index 20: load_font_ex
+///
+/// Purpose: Load an extended font TGA resource by File.dat string id.
+///
+/// VM arguments:
+/// - pop[0]: font_resource (ResourceStringFromFileDat) — resource base name.
+///
+/// Return: status integer.
+///
+/// Side effects: MutatesWindow.
+///
+/// Evidence: Game.sqlite sub_4382D0 pops one File.dat string id, appends
+/// ".tga", unloads the old extended font, then calls PalExFontLoad.
+static SIG_LOAD_FONT_EX: ExtSig = sig!(9, 20, "load_font_ex", pop=1,
+    params=["font_resource":0=ResourceStringFromFileDat=>"extended font resource base name"],
+    return=Integer, effects=[MutatesWindow],
+    purpose="Load an extended font TGA resource.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_4382D0 pops font string, appends .tga, calls PalExFontUnload/PalExFontLoad"],
+    game="0x004382D0");
+/// category 9 index 27: set_font_size
+///
+/// Purpose: Set PAL shared UI font size and return the previous size.
+///
+/// VM arguments:
+/// - pop[0]: font_size (Integer) — PAL font size.
+///
+/// Return: previous font size.
+///
+/// Evidence: Game.sqlite sub_437B00 pops size, reads PalFontGetFontSize, calls
+/// PalFontSetFontSize(size), then writes the old size to dst_slot.
+static SIG_SET_FONT_SIZE: ExtSig = sig!(9, 27, "set_font_size", pop=1,
+    params=["font_size":0=Integer=>"PAL font size"],
+    return=Integer, effects=[MutatesWindow],
+    purpose="Set PAL shared UI font size and return previous size.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_437B00 pops size, calls PalFontGetFontSize and PalFontSetFontSize", PalSqlite:"reverse/PAL.sqlite PalFontSetFontSize 0x1011E734 / PalFontGetFontSize 0x1011C59C"],
+    game="0x00437B00", pal="PalFontSetFontSize" => "0x1011E734");
+/// category 9 index 28: get_font_size
+///
+/// Purpose: Return PAL shared UI font size.
+static SIG_GET_FONT_SIZE: ExtSig = sig!(9, 28, "get_font_size", pop=0,
+    params=[],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Return PAL shared UI font size.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_437AC0 writes PalFontGetFontSize to dst_slot", PalSqlite:"reverse/PAL.sqlite PalFontGetFontSize 0x1011C59C"],
+    game="0x00437AC0", pal="PalFontGetFontSize" => "0x1011C59C");
+/// category 9 index 29: get_font_type
+///
+/// Purpose: Return PAL shared UI font type/language.
+static SIG_GET_FONT_TYPE: ExtSig = sig!(9, 29, "get_font_type", pop=0,
+    params=[],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Return PAL shared UI font type/language.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_438050 writes PalFontGetType to dst_slot", PalSqlite:"reverse/PAL.sqlite PalFontGetType 0x1011CA2E"],
+    game="0x00438050", pal="PalFontGetType" => "0x1011CA2E");
+/// category 9 index 30: set_font_effect
+///
+/// Purpose: Set PAL shared UI font effect mode.
+static SIG_SET_FONT_EFFECT: ExtSig = sig!(9, 30, "set_font_effect", pop=1,
+    params=["effect":0=Mode=>"PAL font effect mode"],
+    return=Integer, effects=[MutatesWindow],
+    purpose="Set PAL shared UI font effect mode.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_437A60 pops effect and calls PalFontSetEffect"],
+    game="0x00437A60");
+/// category 9 index 31: get_font_effect
+///
+/// Purpose: Return PAL shared UI font effect mode.
+static SIG_GET_FONT_EFFECT: ExtSig = sig!(9, 31, "get_font_effect", pop=0,
+    params=[],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Return PAL shared UI font effect mode.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_437A20 writes PalFontGetEffect to dst_slot"],
+    game="0x00437A20");
+/// category 9 index 21: memory_stack_push
+///
+/// Purpose: Snapshot native VM memory bank 715956..732339 onto a 32-entry
+/// memory stack.  Scripts use it around menu/system overlay procedures; this
+/// does not include Mem.dat, so page-request values such as memdat[158] survive
+/// a pop.
+///
+/// VM arguments: none.
+///
+/// Return: status integer.
+///
+/// Side effects: WritesVmMemory.
+///
+/// Evidence: Game.sqlite sub_437E10 copies 0x4000 bytes from ctx+715956 to the
+/// next stack slot at ctx+738524 and increments the memory-stack depth.
+static SIG_MEMORY_STACK_PUSH: ExtSig = sig!(9, 21, "memory_stack_push", pop=0,
+    params=[],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Snapshot the native script memory bank onto the memory stack.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_437E10 copies 0x4000 bytes from ctx+715956 to ctx+738524+(depth*0x4000)"],
+    game="0x00437E10");
+/// category 9 index 22: memory_stack_pop
+///
+/// Purpose: Restore the most recent native VM memory-bank snapshot.  Mem.dat is
+/// intentionally not restored by the native handler.
+///
+/// VM arguments: none.
+///
+/// Return: status integer.
+///
+/// Side effects: WritesVmMemory.
+///
+/// Evidence: Game.sqlite sub_437D90 restores 0x4000 bytes from the current
+/// stack slot to ctx+715956 and clears that stack slot.
+static SIG_MEMORY_STACK_POP: ExtSig = sig!(9, 22, "memory_stack_pop", pop=0,
+    params=[],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Restore the last native script memory-bank snapshot.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_437D90 restores 0x4000 bytes from ctx+738524+(depth*0x4000) to ctx+715956"],
+    game="0x00437D90");
+/// category 9 index 23: list_stack_push_point
+///
+/// Purpose: Push a script point/address onto the native list stack.  The stored
+/// value is the current process base plus the resolved point entry.
+///
+/// VM arguments:
+/// - pop[0]: point_id (PointId) — point operand whose address is pushed.
+///
+/// Return: status integer.
+///
+/// Side effects: ChangesRunState.
+///
+/// Evidence: Game.sqlite sub_437CD0 pops one point id, resolves it through the
+/// point table, adds process base +201016, and PalListPushes an 8-byte entry.
+static SIG_LIST_STACK_PUSH_POINT: ExtSig = sig!(9, 23, "list_stack_push_point", pop=1,
+    params=["point_id":0=PointId=>"script point id whose resolved address is pushed"],
+    return=Integer, effects=[ChangesRunState],
+    purpose="Push a resolved script point onto the native list stack.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_437CD0 pops point id, resolves point table, and PalListPushes the address"],
+    game="0x00437CD0");
+/// category 9 index 24: list_stack_pop_count
+///
+/// Purpose: Pop one or more entries from the native list stack; zero means one
+/// entry, otherwise the popped count is used after subtracting one for a control
+/// flag.
+///
+/// VM arguments:
+/// - pop[0]: count_mode (Integer) — native count/control argument.
+///
+/// Return: status integer.
+///
+/// Side effects: ChangesRunState.
+///
+/// Evidence: Game.sqlite sub_437C00 pops one count/control value and PalListPops
+/// up to the requested number of entries.
+static SIG_LIST_STACK_POP_COUNT: ExtSig = sig!(9, 24, "list_stack_pop_count", pop=1,
+    params=["count_mode":0=Integer=>"native list-pop count/control value"],
+    return=Integer, effects=[ChangesRunState],
+    purpose="Pop native list-stack continuation entries.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_437C00 pops count/control and PalListPops entries"],
+    game="0x00437C00");
+/// category 9 index 53: list_stack_get_count
+///
+/// Purpose: Return the number of entries currently stored in the native list
+/// stack with tag 2.  Cleanup scripts compare this against a saved depth and
+/// call list_stack_pop_count(delta), so returning 0 leaves old menu/text/button
+/// overlays alive.
+///
+/// VM arguments: none.
+///
+/// Return: integer list-stack depth.
+///
+/// Side effects: WritesVmMemory.
+///
+/// Evidence: Game.sqlite sub_437BC0 calls PalListGetDataCount(ctx+804228, 2),
+/// writes the result to the extcall destination, logs "[%d]lsize", and returns
+/// 1.  IDB dump maps category 9 index 53 to 0x00437BC0.
+static SIG_LIST_STACK_GET_COUNT: ExtSig = sig!(9, 53, "list_stack_get_count", pop=0,
+    params=[],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Return native list-stack depth for tag 2.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_437BC0 returns PalListGetDataCount(ctx+804228, 2)", Disassembly:"target/diagnostics/game_idb_extcalls.json maps category 9 index 53 to 0x00437BC0"],
+    game="0x00437BC0");
+
+/// category 15 index 4: system_window_overlay_set
+///
+/// Purpose: Configure a native system/debug/window overlay record used by early
+/// boot and menu procedures. Reachable callsites pass a text/resource id plus
+/// two mode/sentinel arguments.
+///
+/// VM arguments:
+/// - pop[0]: text_id (TextId) — text/resource id or sentinel.
+/// - pop[1]: value (Integer) — per-callsite value.
+/// - pop[2]: mode (Mode) — mode or sentinel 0x0FFFFFFF.
+///
+/// Return: status integer.
+///
+/// Side effects: MutatesWindow.
+///
+/// Evidence: docs/dis.txt/out/script.lua reachable calls consistently push
+/// three args before 000F:0004. Exact Game handler EA remains blocked in the
+/// current IDB export, so this is not marked Verified.
+static SIG_SYSTEM_WINDOW_OVERLAY_SET: ExtSig = sig!(15, 4, "system_window_overlay_set", pop=3,
+    params=[
+        "text_id":0=TextId=>"text/resource id or sentinel",
+        "value":1=Integer=>"per-callsite value",
+        "mode":2=Mode=>"mode or sentinel 0x0FFFFFFF"
+    ],
+    return=Integer, effects=[MutatesWindow],
+    purpose="Configure native system/window overlay record.",
+    status=Blocked, decompiler=Verified,
+    evidence=[Disassembly:"docs/dis.txt reachable ext_000F_0004 callsites push three values", RuntimeTrace:"out/extcall_report.json reachable 000F:0004 pop_count=3"]);
+/// category 15 index 5: debug_window_set
+///
+/// Purpose: Set PAL's debug-window state and return the previous state.
+///
+/// VM arguments:
+/// - pop[0]: state (Mode) — new PalDebugWindow state.
+///
+/// Return: previous debug-window state.
+///
+/// Side effects: MutatesWindow.
+///
+/// Evidence: Game.sqlite sub_410F80 pops one state argument, calls
+/// PalDebugWindowGetState, PalDebugWindowSetState(new_state), writes the old
+/// state to the extcall destination slot, and returns 1.
+static SIG_DEBUG_WINDOW_SET: ExtSig = sig!(15, 5, "debug_window_set", pop=1,
+    params=["state":0=Mode=>"new PalDebugWindow state"],
+    return=Integer, effects=[MutatesWindow],
+    purpose="Set PAL debug-window state and return previous state.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_410F80 pops state, calls PalDebugWindowGetState/SetState, and returns old state"],
+    game="0x00410F80");
 
 // Category 12 - system buttons.
 
@@ -2459,38 +3669,77 @@ static SIG_ACTION_CLEAR_COUNT_OVER: ExtSig = sig!(17, 3, "action_clear_count_ove
     status=Verified, decompiler=Verified,
     evidence=[GameSqlite:"reverse/Game.sqlite sub_40B430 pops one action id, resolves -1 to active id, clears action memory, and returns 1", RuntimeTrace:"pal-vm dispatch_action_stub index 3 pops 1 and clears compatible action state"],
     game="0x0040B430");
-/// category 17 index 5: ext_0011_0005 (action tween, 6-arg)
+/// category 17 index 5: action_timeline_entry
 ///
-/// Purpose: Configure a six-argument Game.exe action/tween entry.  Used for
-/// scene animation timelines.  Canonical name pending full reverse.
+/// Purpose: Append a timed sprite-position delta section to an action line.
+/// Native stores action bytecode section type 0; the runner applies the delta
+/// over `duration_ms` and commits the final position lane when complete.
 ///
-/// VM arguments (display order: action_id, duration_ms, from, to, mode, flags):
-/// - pop[0]: action_id (Integer) — action slot identifier.
-/// - pop[1]: duration_ms (DurationMs) — tween duration.
-/// - pop[2]: from (Integer) — start value.
-/// - pop[3]: to (Integer) — end value.
-/// - pop[4]: mode (Mode) — interpolation mode.
-/// - pop[5]: flags (Flag) — tween flags.
+/// VM arguments (display/pop order):
+/// - pop[0]: line_id (Integer) — action line id, max 0x3f.
+/// - pop[1]: sprite_slot (SpriteSlot) — Game sprite slot resolved through
+///   `sub_449120`.
+/// - pop[2]: delta_x (CoordinateX) — script-space x delta; the native action
+///   parser multiplies by 1.5 before committing to the 1920-wide wrapper.
+/// - pop[3]: delta_y (CoordinateY) — script-space y delta; native multiplies
+///   by 1.5 before committing to the 1080-high wrapper.
+/// - pop[4]: delta_z (Integer) — z/priority delta.
+/// - pop[5]: duration_ms (DurationMs) — section duration; zero coerces to 1.
 ///
 /// Return: void.
 ///
 /// Side effects: CreatesTask, MutatesSprite.
 ///
 /// Evidence:
-/// - Game.sqlite: reverse/Game.sqlite action dispatch group 5/6/10/14/15/29 pops 6
-/// - RuntimeTrace: pal-vm dispatch_action_stub index 5 pops 6
+/// - Game.sqlite: reverse/Game.sqlite `sub_40ADB0` pops line_id plus
+///   sprite_slot/dx/dy/dz/duration, writes section type 0, and resolves the
+///   wrapper with `sub_449120`.
+/// - Game.sqlite: reverse/Game.sqlite `sub_446650` case 0 builds a timed
+///   `sub_403490` position action and `sub_403430` commits final x/y lanes.
+/// - RuntimeTrace: New Game path uses `action_timeline_entry(0, 12, 0, -30,
+///   0, 1000)` after `sp_set_pos_move(12, 0, 30, 0)` to slide the standing
+///   sprite back while fading it in.
 ///
-/// Engine: Blocked — stores 6-arg tween entry.
+/// Engine: Verified — pal-vm maps section type 0 to a PalSprite position
+/// tween.
 ///
-/// Decompiler: Blocked — renders 6 args.
+/// Decompiler: Verified — renders line/slot/delta/duration directly.
+static SIG_ACTION_TIMELINE_5: ExtSig = sig!(17, 5, "action_timeline_entry", pop=6,
+    params=["line_id":0=Integer, "sprite_slot":1=SpriteSlot, "delta_x":2=CoordinateX, "delta_y":3=CoordinateY, "delta_z":4=Integer, "duration_ms":5=DurationMs],
+    return=Void, effects=[CreatesTask, MutatesSprite],
+    purpose="Append a timed sprite-position delta action section.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_40ADB0 pops line_id plus sprite_slot/dx/dy/dz/duration, writes section type 0, and resolves sprite_slot via sub_449120", GameSqlite:"reverse/Game.sqlite sub_446650 case 0 builds sub_403490 timed position delta and sub_403430 commits final position lanes", RuntimeTrace:"New Game path uses action_timeline_entry(0,12,0,-30,0,1000) to undo a temporary sp_set_pos_move offset"]);
+/// category 17 index 6: action_timeline_entry_ex
 ///
-/// Open points: Canonical function name not confirmed.
-static SIG_ACTION_TIMELINE_5: ExtSig = sig!(17, 5, "ext_0011_0005", pop=6,
+/// Purpose: Append a six-argument Game.exe action/tween entry.  Shares the
+/// runtime stack layout with index 5, but native assigns a different internal
+/// section type.
+///
+/// VM arguments: same layout as `action_timeline_entry`.
+///
+/// Return: void.
+///
+/// Side effects: CreatesTask, MutatesSprite.
+///
+/// Evidence: Game.sqlite action dispatch group 5/6/10/14/15/29 consumes six
+/// values and appends an action section; runtime dispatch index 6 pops six.
+static SIG_ACTION_TIMELINE_6: ExtSig = sig!(17, 6, "action_timeline_entry_ex", pop=6,
     params=["action_id":0=Integer, "duration_ms":1=DurationMs, "from":2=Integer, "to":3=Integer, "mode":4=Mode, "flags":5=Flag],
     return=Void, effects=[CreatesTask, MutatesSprite],
-    purpose="Configure a six-argument Game.exe action/tween entry.",
+    purpose="Append a six-argument Game.exe action/tween entry with a distinct native section type.",
     status=Blocked, decompiler=Blocked,
-    evidence=[GameSqlite:"reverse/Game.sqlite action dispatch group 5/6/10/14/15/29 pops 6", RuntimeTrace:"pal-vm dispatch_action_stub index 5 pops 6"]);
+    evidence=[GameSqlite:"reverse/Game.sqlite action dispatch group 5/6/10/14/15/29 pops 6", RuntimeTrace:"pal-vm dispatch_action_stub index 6 pops 6"]);
+/// category 17 index 7: action_timeline4_entry
+///
+/// Purpose: Append a four-argument Game.exe action/tween entry.  Native shares
+/// the same family as index 11 with a different internal section type.
+static SIG_ACTION_TIMELINE_7: ExtSig = sig!(17, 7, "action_timeline4_entry", pop=4,
+    params=["duration_ms":0=DurationMs, "action_id":1=Integer, "arg2":2=Integer, "arg3":3=Integer],
+    return=Void, effects=[CreatesTask, MutatesSprite],
+    purpose="Append a four-argument Game.exe action/tween entry.",
+    status=Blocked, decompiler=Blocked,
+    evidence=[GameSqlite:"reverse/Game.sqlite action dispatch index 7/11 pops 4", RuntimeTrace:"pal-vm dispatch_action_stub index 7 pops 4"]);
 /// category 17 index 8: action_alpha_delta
 ///
 /// Purpose: Configure a timed alpha-delta action for a sprite slot.  The
@@ -2498,7 +3747,7 @@ static SIG_ACTION_TIMELINE_5: ExtSig = sig!(17, 5, "ext_0011_0005", pop=6,
 /// temporary slot-64 layer before clearing it.
 ///
 /// VM arguments (display/source order: action_id, sprite_slot, alpha_delta, duration_ms):
-/// - pop[0]: action_id (Integer) — action slot, usually 0 for wrapper fades.
+/// - pop[0]: action_id (Integer) — action slot, usually 2 for wrapper fades.
 /// - pop[1]: sprite_slot (Integer) — Game sprite slot to mutate.
 /// - pop[2]: alpha_delta (Integer) — signed delta added to current alpha.
 /// - pop[3]: duration_ms (DurationMs) — tween duration.
@@ -2512,8 +3761,11 @@ static SIG_ACTION_TIMELINE_5: ExtSig = sig!(17, 5, "ext_0011_0005", pop=6,
 ///   constructs the `sub_402F30` timed color-lane delta, and
 ///   `sub_4494D0`/`sub_4498D0` clamp the lane into PalSpriteSetColor.
 /// - PAL.sqlite: PalSpriteSetColor 0x10119103.
-/// - RuntimeTrace: point[3042] pushes `1000, -255, 64, 0`, which pops as
-///   action 0, slot 64, delta -255, duration 1000.
+/// - Disassembly: docs/dis.txt point[809] pushes formal arg[-2],
+///   `-255`, formal arg[-1], and `2`; after PAL arg-area reversal this pops
+///   as `[action_id, sprite_slot, delta, duration]`.
+/// - RuntimeTrace: the corrected arg-area maps the EV104AA fade to slot 21 and
+///   duration 1500, eliminating the bogus slot=1500 clear.
 ///
 /// Engine: Verified — schedules the action timer and tweens compatible sprite
 /// alpha from current to current+delta.
@@ -2525,7 +3777,7 @@ static SIG_ACTION_TIMELINE_8: ExtSig = sig!(17, 8, "action_alpha_delta", pop=4,
     return=Void, effects=[CreatesTask, MutatesSprite],
     purpose="Configure a timed sprite alpha-delta action.",
     status=Verified, decompiler=Verified,
-    evidence=[GameSqlite:"reverse/Game.sqlite sub_446650 case 3 builds sub_402F30 timed alpha delta and sub_4494D0/sub_4498D0 commit through PalSpriteSetColor", PalSqlite:"PalSpriteSetColor 0x10119103", RuntimeTrace:"point[3042] pushes 1000,-255,64,0 before ext_0011_0008"]);
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_446650 case 3 builds sub_402F30 timed alpha delta and sub_4494D0/sub_4498D0 commit through PalSpriteSetColor", PalSqlite:"PalSpriteSetColor 0x10119103", Disassembly:"docs/dis.txt point[809] formal args plus pack_args reversal produce pop order action_id,slot,delta,duration", RuntimeTrace:"EV104AA path decodes slot=21 duration=1500 and clears slot=21"]);
 /// category 17 index 23: set_active_action
 ///
 /// Purpose: Set the active action id that is used by subsequent action
@@ -2553,38 +3805,52 @@ static SIG_ACTION_SET_ACTIVE: ExtSig = sig!(17, 23, "set_active_action", pop=1,
     status=Verified, decompiler=Verified,
     evidence=[GameSqlite:"reverse/Game.sqlite sub_4095C0 pops action_id, validates <16, stores old/current active ids, and logs set_active_action", RuntimeTrace:"pal-vm dispatch_action_stub index 23 pops action_id and updates active action"],
     game="0x004095C0");
-/// category 17 index 9: ext_0011_0009 (action 2-arg)
+/// category 17 index 9: action_line_wait
 ///
-/// Purpose: Two-argument action helper; sets active action from the second
-/// argument after receiving a value in the first.
+/// Purpose: Append a wait/timing section to a Game.exe action line.  Native
+/// records section type 3 and stores the second parameter in the section
+/// duration field.
 ///
 /// VM arguments:
-/// - pop[0]: value (Integer) — first argument; purpose not fully reversed.
-/// - pop[1]: action_id (Integer) — action id to set active.
+/// - pop[0]: line_id (Integer) — action line id, max 0x3f.
+/// - pop[1]: duration_ms (DurationMs) — section duration; native coerces zero
+///   to 1.
 ///
 /// Return: void.
 ///
 /// Side effects: CreatesTask.
 ///
 /// Evidence:
-/// - Game.sqlite: reverse/Game.sqlite action dispatch index 9 pops 2
-/// - RuntimeTrace: pal-vm dispatch_action_stub index 9 pops 2
+/// - Game.sqlite / IDB: category 17 dispatch index 9 resolves to sub_40A390.
+///   It pops one action line id from the VM stack, calls sub_44B050 once for
+///   duration, stores section type 3, stores duration in section[19], and
+///   increments the line section count.
 ///
-/// Engine: Blocked — stores 2-arg action entry.
+/// Engine: Verified — pal-vm pops line_id/duration, schedules the compatible
+/// action timer, and no longer treats duration as active_action_id.
 ///
-/// Decompiler: Blocked — renders as ext_0011_0009(value, action_id).
-///
-/// Open points: Canonical name and exact role of pop[0] not confirmed.
-static SIG_ACTION_TIMELINE_9: ExtSig = sig!(17, 9, "ext_0011_0009", pop=2,
-    params=["value":0=Integer, "action_id":1=Integer],
+/// Decompiler: Verified — renders as action_line_wait(line_id, duration_ms).
+static SIG_ACTION_TIMELINE_9: ExtSig = sig!(17, 9, "action_line_wait", pop=2,
+    params=["line_id":0=Integer, "duration_ms":1=DurationMs],
     return=Void, effects=[CreatesTask],
-    purpose="Set active action from the second argument after a two-argument action helper.",
+    purpose="Append a wait/timing section to a Game.exe action line.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_40A390 pops line id and duration, writes action section type 3 and duration field", RuntimeTrace:"pal-vm dispatch_action_stub index 9 pops line_id/duration and schedules duration"],
+    game="0x0040A390");
+/// category 17 index 10: action_timeline_entry_ease
+///
+/// Purpose: Append a six-argument action/tween entry in the same family as
+/// index 5, with native interpolation/easing section type selected by index 10.
+static SIG_ACTION_TIMELINE_10: ExtSig = sig!(17, 10, "action_timeline_entry_ease", pop=6,
+    params=["action_id":0=Integer, "duration_ms":1=DurationMs, "from":2=Integer, "to":3=Integer, "mode":4=Mode, "flags":5=Flag],
+    return=Void, effects=[CreatesTask, MutatesSprite],
+    purpose="Append a six-argument Game.exe action/tween entry with easing section type.",
     status=Blocked, decompiler=Blocked,
-    evidence=[GameSqlite:"reverse/Game.sqlite action dispatch index 9 pops 2", RuntimeTrace:"pal-vm dispatch_action_stub index 9 pops 2"]);
-/// category 17 index 11: ext_0011_000B (action tween, 4-arg)
+    evidence=[GameSqlite:"reverse/Game.sqlite action dispatch group 5/6/10/14/15/29 pops 6", RuntimeTrace:"pal-vm dispatch_action_stub index 10 pops 6"]);
+/// category 17 index 11: action_timeline4_entry_ex
 ///
 /// Purpose: Four-argument action/tween helper sharing the index-7 dispatch
-/// path.  Canonical name pending full reverse.
+/// path with a different native section type.
 ///
 /// VM arguments: same layout as ext_0011_0008 (index 8).
 /// - pop[0]: duration_ms (DurationMs)
@@ -2603,42 +3869,98 @@ static SIG_ACTION_TIMELINE_9: ExtSig = sig!(17, 9, "ext_0011_0009", pop=2,
 /// Engine: Blocked — stores 4-arg tween entry.
 ///
 /// Decompiler: Blocked — renders 4 args.
-static SIG_ACTION_TIMELINE_11: ExtSig = sig!(17, 11, "ext_0011_000B", pop=4,
+static SIG_ACTION_TIMELINE_11: ExtSig = sig!(17, 11, "action_timeline4_entry_ex", pop=4,
     params=["duration_ms":0=DurationMs, "action_id":1=Integer, "arg2":2=Integer, "arg3":3=Integer],
     return=Void, effects=[CreatesTask, MutatesSprite],
     purpose="Four-argument action/tween helper sharing the index-7 path.",
     status=Blocked, decompiler=Blocked,
     evidence=[GameSqlite:"reverse/Game.sqlite action dispatch index 11 pops 4", RuntimeTrace:"pal-vm dispatch_action_stub index 11 pops 4"]);
-/// category 17 index 29: ext_0011_001D (action tween, 6-arg)
+/// category 17 index 14: action_timeline_entry_log
 ///
-/// Purpose: Six-argument action/tween helper sharing the index-5 dispatch
-/// path.  Canonical name pending full reverse.
+/// Purpose: Append a six-argument action/tween entry; IDB helper family
+/// includes log/ease interpolation variants.
+static SIG_ACTION_TIMELINE_14: ExtSig = sig!(17, 14, "action_timeline_entry_log", pop=6,
+    params=["action_id":0=Integer, "duration_ms":1=DurationMs, "from":2=Integer, "to":3=Integer, "mode":4=Mode, "flags":5=Flag],
+    return=Void, effects=[CreatesTask, MutatesSprite],
+    purpose="Append a six-argument action/tween entry using a native log/ease section variant.",
+    status=Blocked, decompiler=Blocked,
+    evidence=[GameSqlite:"reverse/Game.sqlite action dispatch group 5/6/10/14/15/29 pops 6", RuntimeTrace:"pal-vm dispatch_action_stub index 14 pops 6"]);
+/// category 17 index 15: action_timeline_entry_sine
 ///
-/// VM arguments: same layout as ext_0011_0005 (index 5).
-/// - pop[0]: action_id (Integer)
-/// - pop[1]: duration_ms (DurationMs)
-/// - pop[2]: from (Integer)
-/// - pop[3]: to (Integer)
-/// - pop[4]: mode (Mode)
-/// - pop[5]: flags (Flag)
+/// Purpose: Append a six-argument action/tween entry; IDB helper family
+/// includes sine interpolation variants.
+static SIG_ACTION_TIMELINE_15: ExtSig = sig!(17, 15, "action_timeline_entry_sine", pop=6,
+    params=["action_id":0=Integer, "duration_ms":1=DurationMs, "from":2=Integer, "to":3=Integer, "mode":4=Mode, "flags":5=Flag],
+    return=Void, effects=[CreatesTask, MutatesSprite],
+    purpose="Append a six-argument action/tween entry using a native sine section variant.",
+    status=Blocked, decompiler=Blocked,
+    evidence=[GameSqlite:"reverse/Game.sqlite action dispatch group 5/6/10/14/15/29 pops 6", RuntimeTrace:"pal-vm dispatch_action_stub index 15 pops 6"]);
+/// category 17 index 20: action_timeline_rect
+///
+/// Purpose: Append a five-argument rect/source-rect action section.  Native
+/// writes action section type 20 in `sub_4097A0`.
+static SIG_ACTION_TIMELINE_20: ExtSig = sig!(17, 20, "action_timeline_rect", pop=5,
+    params=["line_id":0=Integer, "left":1=CoordinateX, "top":2=CoordinateY, "right":3=CoordinateX, "bottom":4=CoordinateY],
+    return=Void, effects=[CreatesTask, MutatesSprite],
+    purpose="Append a source-rect action section to an action line.",
+    status=Blocked, decompiler=Blocked,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_4097A0 pops line id, reads four action args via sub_44B050, writes section type 20", RuntimeTrace:"pal-vm dispatch_action_stub index 20 pops 5"],
+    game="0x004097A0");
+/// category 17 index 21: action_push
+///
+/// Purpose: Push the current native action context onto the Game action stack.
+/// Native copies the active action block into a heap backup and clears the
+/// current block.
+static SIG_ACTION_PUSH: ExtSig = sig!(17, 21, "action_push", pop=0,
+    params=[], return=Void, effects=[CreatesTask],
+    purpose="Push current Game action context onto the action stack.",
+    status=Blocked, decompiler=Blocked,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_4096D0 action_push copies current action block to heap backup"]);
+/// category 17 index 22: action_pop
+///
+/// Purpose: Restore the last action context saved by `action_push`.
+static SIG_ACTION_POP: ExtSig = sig!(17, 22, "action_pop", pop=0,
+    params=[], return=Void, effects=[CreatesTask],
+    purpose="Restore the previous Game action context from the action stack.",
+    status=Blocked, decompiler=Blocked,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_409660 action_pop restores heap-saved action block"]);
+/// category 17 index 29: action_timeline_entry2
+///
+/// Purpose: Append a timed sprite-position delta section to the active Game
+/// action line.  This is the common ADV standing-sprite slide helper.
+///
+/// VM arguments (pop/display order):
+/// - pop[0]: line_id (Integer) — action line id, max 0x3f.
+/// - pop[1]: sprite_slot (SpriteSlot) — Game sprite slot resolved through
+///   `sub_449120`.
+/// - pop[2]: delta_x (CoordinateX) — script-space x delta; native multiplies
+///   by 1.5 before writing the 1920-wide action section.
+/// - pop[3]: delta_y (CoordinateY) — script-space y delta; native multiplies
+///   by 1.5 before writing the 1080-high action section.
+/// - pop[4]: delta_z (Integer) — z/priority delta.
+/// - pop[5]: duration_ms (DurationMs) — section duration; zero coerces to 1.
 ///
 /// Return: void.
 ///
 /// Side effects: CreatesTask, MutatesSprite.
 ///
 /// Evidence:
-/// - Game.sqlite: reverse/Game.sqlite action dispatch index 29 pops 6
-/// - RuntimeTrace: pal-vm dispatch_action_stub index 29 pops 6
+/// - Game.sqlite: reverse/Game.sqlite `sub_40AC70` pops line id, then calls
+///   `sub_44B050` for sprite slot, x/y/z delta, and duration.  It stores
+///   section type 15 and resolves the sprite slot with `sub_449120`.
+/// - RuntimeTrace: ADV New Game path uses this immediately after
+///   `sp_set_pos_move(slot, 0, -500, 0)` to slide standing sprites back into
+///   position.
 ///
-/// Engine: Blocked — stores 6-arg tween entry.
+/// Engine: Verified — pal-vm maps the section to a PalSprite position tween.
 ///
-/// Decompiler: Blocked — renders 6 args.
-static SIG_ACTION_TIMELINE_29: ExtSig = sig!(17, 29, "ext_0011_001D", pop=6,
-    params=["action_id":0=Integer, "duration_ms":1=DurationMs, "from":2=Integer, "to":3=Integer, "mode":4=Mode, "flags":5=Flag],
+/// Decompiler: Verified — renders complete line/slot/delta/duration args.
+static SIG_ACTION_TIMELINE_29: ExtSig = sig!(17, 29, "action_timeline_entry2", pop=6,
+    params=["line_id":0=Integer, "sprite_slot":1=SpriteSlot, "delta_x":2=CoordinateX, "delta_y":3=CoordinateY, "delta_z":4=Integer, "duration_ms":5=DurationMs],
     return=Void, effects=[CreatesTask, MutatesSprite],
-    purpose="Six-argument action/tween helper sharing the index-5 path.",
-    status=Blocked, decompiler=Blocked,
-    evidence=[GameSqlite:"reverse/Game.sqlite action dispatch index 29 pops 6", RuntimeTrace:"pal-vm dispatch_action_stub index 29 pops 6"]);
+    purpose="Append a timed sprite-position delta action section.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_40AC70 pops line_id plus sprite_slot/dx/dy/dz/duration via sub_44B050, stores section type 15, and resolves sprite_slot via sub_449120", RuntimeTrace:"New Game ST05A path: sp_set_pos_move(slot=12,dy=-500) followed by action_timeline_entry2 tween restoring the standing sprite"]);
 /// category 17 index 30: set_action_clear
 ///
 /// Purpose: Clear/reset an action entry.  action_id=-1 clears the current
@@ -2669,6 +3991,212 @@ static SIG_ACTION_SET_CLEAR: ExtSig = sig!(17, 30, "set_action_clear", pop=1,
 
 // Category 18 - INI/file startup path.
 
+/// category 18 index 1: app_exec
+///
+/// Purpose: Launch or open a resolved application/path.  Native calls
+/// ShellExecuteA after resolving the script string and resetting CWD to the PAL
+/// file root.
+///
+/// VM arguments:
+/// - pop[0]: path (TextStringFromTextDat/DynamicString) — executable or file
+///   path to pass to ShellExecuteA.
+///
+/// Return: status integer, 1 after dispatch.
+///
+/// Side effects: ReadsFile, MutatesWindow.
+///
+/// Evidence:
+/// - Game.sqlite: sub_41AB90 pops one string, calls PalGetFilePath(),
+///   SetCurrentDirectoryA(), then ShellExecuteA("open", path).
+/// - Disassembly: docs/dis.txt 00059EA0 pushes the wsprint result before
+///   ext_0012_0001.
+///
+/// Engine: Blocked — portable runtime deliberately does not launch host
+/// programs, but it resolves and logs the target and preserves stack/return.
+///
+/// Decompiler: Verified — renders app_exec(path) with the real argument.
+static SIG_APP_EXEC: ExtSig = sig!(18, 1, "app_exec", pop=1,
+    params=["path":0=TextStringFromTextDat=>"executable/file path"],
+    return=Integer, effects=[ReadsFile, MutatesWindow],
+    purpose="Open a resolved path through the OS shell; portable runtime records but does not launch.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_41AB90 pops one string and calls ShellExecuteA", Disassembly:"docs/dis.txt 00059EA0 pushes path before ext_0012_0001"],
+    game="0x0041AB90");
+
+/// category 18 index 9: wsprint
+///
+/// Purpose: Format a script string into a dynamic string buffer.  The native
+/// handler is used heavily by file/table scan loops and menu/debug overlays;
+/// a wrong pop count here leaves dynamic strings empty and corrupts the VM
+/// stack for following strlenf/string compare calls.
+///
+/// VM arguments:
+/// - pop[0]: dst (DynamicString) — destination `0x10000000 | slot` buffer.
+/// - pop[1]: format (TextStringFromTextDat/DynamicString) — printf-like format.
+/// - pop[2..9]: value0..value7 (Integer/TextStringFromTextDat/DynamicString)
+///   — formatting operands. `%f`/`%s` resolve strings, `%d`/`%i` resolve ints.
+///
+/// Return: status integer.
+///
+/// Side effects: WritesVmMemory.
+///
+/// Evidence:
+/// - Game.sqlite: sub_419560 pops destination, format, then eight values,
+///   resolves the format through sub_44B120/sub_44B1E0, expands printf-like
+///   tokens, and copies the result to `ctx+771296+2047*slot`.
+/// - RuntimeTrace: New Game path reaches repeated strlenf loops immediately
+///   after wsprint/string allocation; zero-pop fallback made every length 0.
+///
+/// Engine: Verified — runtime pops ten values and writes a formatted dynamic
+/// string for `%f`/`%s`/`%d`/`%i`/`%x` tokens.
+///
+/// Decompiler: Verified — renders wsprint(dst, format, value0..value7).
+static SIG_WSPRINT: ExtSig = sig!(18, 9, "wsprint", pop=10,
+    params=[
+        "dst":0=BufferPointer=>"destination dynamic string handle",
+        "format":1=TextStringFromTextDat=>"printf-like format string",
+        "value0":2=Integer=>"format operand 0",
+        "value1":3=Integer=>"format operand 1",
+        "value2":4=Integer=>"format operand 2",
+        "value3":5=Integer=>"format operand 3",
+        "value4":6=Integer=>"format operand 4",
+        "value5":7=Integer=>"format operand 5",
+        "value6":8=Integer=>"format operand 6",
+        "value7":9=Integer=>"format operand 7"
+    ],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Format a script string into a dynamic string buffer.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"0x00419560 sub_419560 pops dst/format/eight values and writes formatted bytes to dynamic string storage", RuntimeTrace:"codex-sprite-transition-new showed strlenf on freshly allocated handles staying 0 under the old zero-pop fallback"],
+    game="0x00419560");
+
+/// category 18 index 3: string_not_equal
+///
+/// Purpose: Compare two script strings case-insensitively and return whether
+/// they differ.  Used by table/file scan loops to stop when the currently read
+/// label does not match the requested label.
+///
+/// VM arguments:
+/// - pop[0]: lhs (TextStringFromTextDat/DynamicString) — first string id.
+/// - pop[1]: rhs (TextStringFromTextDat/DynamicString) — second string id.
+///
+/// Return: bool integer, 1 when strings differ, 0 when equal.
+///
+/// Side effects: WritesVmMemory.
+///
+/// Evidence:
+/// - Game.sqlite: sub_41EBD0 pops two string ids, resolves both with
+///   sub_44B120, lowercases both strings, strcmp()s them, and writes
+///   `(strcmp != 0)` to the extcall return slot.
+/// - Disassembly: docs/dis.txt callsites push two values before ext_0012_0003
+///   and branch on the returned bool.
+///
+/// Engine: Verified — runtime pops two arguments and compares resolved strings
+/// case-insensitively.
+///
+/// Decompiler: Verified — renders string_not_equal(lhs, rhs) instead of the
+/// raw ext_0012_0003 name.
+static SIG_STRING_NOT_EQUAL: ExtSig = sig!(18, 3, "string_not_equal", pop=2,
+    params=["lhs":0=TextStringFromTextDat=>"first script/dynamic string", "rhs":1=TextStringFromTextDat=>"second script/dynamic string"],
+    return=Bool, effects=[WritesVmMemory],
+    purpose="Case-insensitive string inequality test used by table scan loops.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_41EBD0 pops two strings, lowercases both, strcmp()s, and returns strcmp != 0", Disassembly:"docs/dis.txt 00004170/0000F470/000637D0 push two args before ext_0012_0003"],
+    game="0x0041EBD0");
+/// category 18 index 5: strgetcf
+///
+/// Purpose: Read one character code or parse a digit-only substring from a
+/// script/dynamic string.  This is used by CSV/table loops after `file_string`
+/// and by `%02d` resource-name builders; documenting it as favorite/bookmark
+/// access was an old reverse mistake.
+///
+/// VM arguments:
+/// - pop[0]: text (TextStringFromTextDat) — source string handle/id.
+/// - pop[1]: offset (Integer) — byte offset inside the resolved string.
+/// - pop[2]: length (Integer) — zero returns one byte; non-zero parses that
+///   many ASCII digits as an integer.
+///
+/// Return: Integer — character byte when length is zero, parsed integer for a
+/// digit-only span, or 0 for out-of-range/non-digit spans.
+///
+/// Side effects: WritesVmMemory (native extcall return slot).
+///
+/// Evidence:
+/// - Game.sqlite/IDB: sub_41A6B0 pops string, offset, length; resolves with
+///   sub_44B120; returns byte-at-offset when length is zero, otherwise copies
+///   a bounded substring and validates digits before atoi.
+/// - RuntimeTrace: table/resource-name setup calls ext_0012_0005 immediately
+///   after file_string/strlenf and expects numeric character fields.
+///
+/// Engine: Verified — pal-vm `ext_str_get_char_or_int` implements the same
+/// three-argument return behavior.
+///
+/// Decompiler: Verified — renders strgetcf(text, offset, length).
+static SIG_STRGETCF: ExtSig = sig!(18, 5, "strgetcf", pop=3,
+    params=["text":0=TextStringFromTextDat=>"source script/dynamic string", "offset":1=Integer=>"byte offset", "length":2=Integer=>"0 for one byte, non-zero for digit substring"],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Read a character byte or parse a numeric substring from a resolved string.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite/IDB sub_41A6B0 pops string, offset, length and returns byte or parsed digit substring", RuntimeTrace:"file_string/strlenf table loops call ext_0012_0005 for character/numeric fields"],
+    game="0x0041A6B0");
+/// category 18 index 8: file_exist
+///
+/// Purpose: Test whether a resolved PAL resource/path exists.
+///
+/// VM arguments:
+/// - pop[0]: path (TextStringFromTextDat/DynamicString) — file/resource path.
+///
+/// Return: bool integer.
+///
+/// Side effects: ReadsFile.
+///
+/// Evidence:
+/// - Game.sqlite: sub_41A260 pops one string, resolves it through sub_44B120,
+///   calls PalFileCreate/CloseHandle, and writes a boolean result.
+/// - Disassembly: docs/dis.txt 00067BF0 and 00068390 push a formatted path
+///   before ext_0012_0008.
+///
+/// Engine: Verified — portable runtime checks ResourceManager/PAC and loose
+/// root paths without opening native Win32 handles.
+///
+/// Decompiler: Verified — renders file_exist(path).
+static SIG_FILE_EXIST: ExtSig = sig!(18, 8, "file_exist", pop=1,
+    params=["path":0=TextStringFromTextDat=>"resource or filesystem path"],
+    return=Bool, effects=[ReadsFile],
+    purpose="Return whether a resolved resource/path exists.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_41A260 pops one string and calls PalFileCreate", Disassembly:"docs/dis.txt 00067BF0/00068390 push path before file_exist"],
+    game="0x0041A260");
+/// category 18 index 10: check_disc
+///
+/// Purpose: Check whether the requested disc/volume label is mounted.  Native
+/// bypasses the check in debug mode, otherwise scans CD-ROM drives.
+///
+/// VM arguments:
+/// - pop[0]: volume_label (TextStringFromTextDat/DynamicString) — requested
+///   disc volume label.
+///
+/// Return: bool integer.
+///
+/// Side effects: ReadsFile.
+///
+/// Evidence:
+/// - Game.sqlite: sub_419370 pops one string; if PalDebugIs() it returns 1,
+///   otherwise enumerates logical drives and compares CD-ROM volume labels.
+/// - Disassembly: docs/dis.txt 0002D03C and 0002D168 push the label before
+///   ext_0012_000A.
+///
+/// Engine: Verified — portable runtime follows the debug/compat path and
+/// returns true so non-Windows/headless runs do not fail a physical-disc check.
+///
+/// Decompiler: Verified — renders check_disc(volume_label).
+static SIG_CHECK_DISC: ExtSig = sig!(18, 10, "check_disc", pop=1,
+    params=["volume_label":0=TextStringFromTextDat=>"requested CD/DVD volume label"],
+    return=Bool, effects=[ReadsFile],
+    purpose="Check mounted disc volume label; portable runtime accepts the check.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_419370 pops one label and scans CD-ROM volume labels, with debug return 1", Disassembly:"docs/dis.txt 0002D03C/0002D168 push label before check_disc"],
+    game="0x00419370");
 /// category 18 index 6: arg_get
 ///
 /// Purpose: Read a value from the current Game.exe extcall argument stack by
@@ -2676,26 +4204,206 @@ static SIG_ACTION_SET_CLEAR: ExtSig = sig!(17, 30, "set_action_clear", pop=1,
 /// argument block of the calling extcall without re-popping it.
 ///
 /// VM arguments:
-/// - pop[0]: index (Integer) — 1-based argument position; runtime passes
-///   index+1 to extcall_arg().
+/// - pop[0]: ignored (Integer) — native pops one value but does not use it.
 ///
-/// Return: Integer — argument value at position, or 0 if out of range.
+/// Return: DynamicString handle — `slot | 0x10000000`.
 ///
-/// Side effects: none (read-only inspection of argument frame).
+/// Side effects: WritesVmMemory.
 ///
 /// Evidence:
-/// - Game.sqlite: reverse/Game.sqlite argument-stack helper sub
-/// - RuntimeTrace: pal-vm ext_arg_get pops 1 and returns extcall_arg(index+1)
+/// - Game.sqlite: handler 0x0041AAF0 pops one value, uses ctx[192823] as a
+///   rotating 16-slot string-buffer cursor, clears `ctx+771296+2047*slot`,
+///   advances the cursor, and writes `slot | 0x10000000` to the extcall dst.
+/// - RuntimeTrace: longrun-newgame-ctrl-60000 executes this helper 1519 times
+///   in file/string setup loops.
 ///
-/// Engine: Blocked — pops index and returns current extcall arg frame value.
+/// Engine: Verified — pal-vm keeps the same 16-slot rotating dynamic-string
+/// handle table and clears the selected slot.
 ///
-/// Decompiler: Blocked — renders as arg_get(index).
-static SIG_ARG_GET: ExtSig = sig!(18, 6, "arg_get", pop=1,
-    params=["index":0=Integer],
-    return=Integer, effects=[],
-    purpose="Read a value from the current Game.exe extcall argument stack by index.",
+/// Decompiler: Verified — renders as string_alloc(ignored).
+static SIG_ARG_GET: ExtSig = sig!(18, 6, "string_alloc", pop=1,
+    params=["ignored":0=Integer],
+    return=StringId, effects=[WritesVmMemory],
+    purpose="Allocate/clear one native rotating dynamic string buffer and return its 0x10000000-tagged handle.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"0x0041AAF0 pops one ignored value, clears 2047-byte dynamic string slot ctx[192823], advances modulo 16, and writes slot|0x10000000", RuntimeTrace:"longrun-newgame-ctrl-60000 executes ext_0012_0006 1519 times"],
+    game="0x0041AAF0");
+/// category 18 index 12: strlen
+///
+/// Purpose: Return the byte length of a dynamic/script string.  Native only
+/// counts dynamic string handles in the recovered handler; the portable VM also
+/// resolves Text.dat ids so decompiled/resource-driven scripts remain readable.
+///
+/// VM arguments:
+/// - pop[0]: value (TextStringFromTextDat/DynamicString) — string id/handle.
+///
+/// Return: integer byte length.
+///
+/// Side effects: WritesVmMemory.
+///
+/// Evidence:
+/// - Game.sqlite: sub_41EAC0 pops one value, checks the dynamic string tag,
+///   copies the string into a local buffer, strlen()s it, and writes the length.
+/// - Disassembly: docs/dis.txt 0005D420 and later callsites use the returned
+///   value as a loop/condition result.
+///
+/// Engine: Verified — pops one value, resolves it, and returns byte length.
+///
+/// Decompiler: Verified — renders strlen(value) instead of ext_0012_000C.
+static SIG_STRING_LENGTH: ExtSig = sig!(18, 12, "strlen", pop=1,
+    params=["value":0=TextStringFromTextDat=>"script/dynamic string handle"],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Return byte length of a script/dynamic string.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_41EAC0 pops one dynamic string handle and returns strlen", Disassembly:"docs/dis.txt 0005D420 uses ext_0012_000C return as a condition"],
+    game="0x0041EAC0");
+/// category 18 index 13: process_checkpoint_set
+///
+/// Purpose: Store a script/process checkpoint id used by the native return/list
+/// scheduler.  Reachable story procedures call it before save thumbnail,
+/// transition, or chapter-entry setup.
+///
+/// VM arguments:
+/// - pop[0]: checkpoint_id (PointId) — script point/process id.
+///
+/// Return: status integer.
+///
+/// Side effects: ChangesRunState.
+///
+/// Evidence:
+/// - Game.sqlite: sub_41B8D0 pops one value, PalListPushes the current process
+///   point with tag 3, and stores the popped id in dword_54CE38.
+/// - Disassembly: docs/dis.txt 0011A054/0011A068/0011A07C call index 13 with
+///   point ids 345/346/347 before save/transition setup.
+///
+/// Engine: Blocked — full native PalList scheduler tags are not byte-for-byte
+/// modeled yet; runtime records no visible state beyond stack discipline.
+///
+/// Decompiler: Blocked — renders process_checkpoint_set(checkpoint_id).
+static SIG_PROCESS_CHECKPOINT_SET: ExtSig = sig!(18, 13, "process_checkpoint_set", pop=1,
+    params=["checkpoint_id":0=PointId=>"script/process checkpoint id"],
+    return=Integer, effects=[ChangesRunState],
+    purpose="Store native script/process checkpoint id for the return/list scheduler.",
     status=Blocked, decompiler=Blocked,
-    evidence=[GameSqlite:"reverse/Game.sqlite argument-stack helper", RuntimeTrace:"pal-vm ext_arg_get pops 1 and returns extcall_arg(index+1)"]);
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_41B8D0 pops one id, pushes current process point with PalList tag 3, and stores dword_54CE38", Disassembly:"docs/dis.txt 0011A054/0011A068/0011A07C pass point ids to ext_0012_000D"],
+    game="0x0041B8D0");
+/// category 18 index 14: update_access
+///
+/// Purpose: Mark an access/read flag by resource name or numeric entry id.
+///
+/// VM arguments:
+/// - pop[0]: entry (Integer/TextStringFromTextDat) — access id or resource
+///   name.
+///
+/// Return: status integer.
+///
+/// Side effects: WritesVmMemory, ReadsFile.
+///
+/// Evidence:
+/// - Game.sqlite: sub_417C20 pops one value. String handles are resolved and
+///   looked up in the native access table; numeric ids update packed access
+///   flag bits under PalTaskGetTaskData(0).
+/// - Disassembly: docs/dis.txt 0005B828, 00063410, and 00064C48 push one
+///   entry before ext_0012_000E.
+///
+/// Engine: Blocked — portable runtime records the access update; the full
+/// packed native access bitmap is not yet modeled.
+///
+/// Decompiler: Verified — renders update_access(entry).
+static SIG_UPDATE_ACCESS: ExtSig = sig!(18, 14, "update_access", pop=1,
+    params=["entry":0=TextStringFromTextDat=>"access flag id or resource string"],
+    return=Integer, effects=[WritesVmMemory, ReadsFile],
+    purpose="Mark native access/read flag entry.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_417C20 pops one id/string and mutates native access bits", Disassembly:"docs/dis.txt 0005B828/00063410/00064C48 push entry before update_access"],
+    game="0x00417C20");
+/// category 18 index 21: strlenf
+///
+/// Purpose: Resolve a script/dynamic string and return the native byte length.
+/// Used by file/table scan loops before string comparison.
+///
+/// VM arguments:
+/// - pop[0]: value (TextStringFromTextDat/DynamicString) — string id/handle.
+///
+/// Return: integer byte length.
+///
+/// Side effects: WritesVmMemory.
+///
+/// Evidence:
+/// - Game.sqlite: handler 0x0041A5F0 `sub_41A5F0` pops one string handle,
+///   calls `sub_44B1E0(Str1, value, 0)`, computes `strlen(Str1)`, and writes
+///   that length to `ctx[dst + 177710]`.
+/// - RuntimeTrace: longrun-newgame-ctrl-60000 executes this helper 48839 times
+///   from PC 0x00004128/0x000043D0 in the string/file loop.
+///
+/// Engine: Verified — pal-vm resolves the script string and returns its
+/// original NLS byte length, matching native strlen semantics.
+///
+/// Decompiler: Verified — renders strlenf(value).
+static SIG_STRING_NON_EMPTY: ExtSig = sig!(18, 21, "strlenf", pop=1,
+    params=["value":0=TextStringFromTextDat=>"script/dynamic string handle"],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Return native strlen byte length for a resolved script/dynamic string.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"0x0041A5F0 sub_41A5F0 pops one string handle, calls sub_44B1E0, strlen(Str1), and writes length to ctx[dst + 177710]", RuntimeTrace:"longrun-newgame-ctrl-60000 executes ext_0012_0015 48839 times before file/string loop branches"],
+    game="0x0041A5F0");
+/// category 18 index 28: attach_work_process
+///
+/// Purpose: Attach the native Game.exe background work-process pump.  This is
+/// used by menu/system scripts to enable a PAL-thread work callback while the
+/// script waits for UI/system state.
+///
+/// VM arguments: none.
+///
+/// Return: status integer.
+///
+/// Side effects: CreatesTask, WritesVmMemory, ChangesRunState.
+///
+/// Evidence:
+/// - Game.sqlite / IDB: category 18 dispatch index 28 resolves to sub_417A50.
+///   sub_417A50 has no VM stack-pop sequence, sets VM flags at +804088 and
+///   +804084, then calls
+///   PalAttachWorkProcess(sub_44A080, PalTaskGetTaskData(0)+824).
+/// - PAL.sqlite: PalAttachWorkProcess 0x1011CCA9 dispatches to
+///   PalAttachWorkProcess_0 0x10237F80, which posts a PAL work-thread message.
+///
+/// Engine: Verified — pal-vm pops zero arguments and records the compatible
+/// single-threaded attach flag/state dirty signal.
+///
+/// Decompiler: Verified — renders attach_work_process() with no bogus
+/// arg_base/value parameter.
+static SIG_ATTACH_WORK_PROCESS: ExtSig = sig!(18, 28, "attach_work_process", pop=0,
+    params=[],
+    return=Integer, effects=[CreatesTask, WritesVmMemory, ChangesRunState],
+    purpose="Attach the Game.exe/PAL background work-process pump.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_417A50 pops no args, sets +804088/+804084, calls PalAttachWorkProcess(sub_44A080, PalTaskGetTaskData(0)+824)", PalSqlite:"reverse/PAL.sqlite PalAttachWorkProcess 0x1011CCA9 -> PalAttachWorkProcess_0 0x10237F80 posts PAL work-thread message"],
+    game="0x00417A50", pal="PalAttachWorkProcess" => "0x1011CCA9");
+/// category 18 index 29: detach_work_process
+///
+/// Purpose: Clear the native background work-process attached flag.
+///
+/// VM arguments: none.
+///
+/// Return: status integer.
+///
+/// Side effects: WritesVmMemory, ChangesRunState.
+///
+/// Evidence:
+/// - Game.sqlite / IDB: category 18 dispatch index 29 resolves to sub_417A30.
+///   sub_417A30 clears VM flag +804088 and returns 1; it has no VM pop.
+///
+/// Engine: Verified — pal-vm pops zero arguments and clears the portable attach
+/// flag.
+///
+/// Decompiler: Verified — renders detach_work_process().
+static SIG_DETACH_WORK_PROCESS: ExtSig = sig!(18, 29, "detach_work_process", pop=0,
+    params=[],
+    return=Integer, effects=[WritesVmMemory, ChangesRunState],
+    purpose="Detach the Game.exe/PAL background work-process pump flag.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_417A30 pops no args and clears +804088"],
+    game="0x00417A30");
 /// category 18 index 30: openfile
 ///
 /// Purpose: Open a PAC-resident resource file by its resolved script string
@@ -2749,6 +4457,36 @@ static SIG_READ_FILE: ExtSig = sig!(18, 31, "read_file", pop=3,
     params=["handle":0=Handle, "temp_offset":1=BufferPointer, "count":2=Integer],
     return=Integer, effects=[ReadsFile, WritesVmMemory], purpose="Read file/table bytes into VM temp memory.",
     status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md 24.9"]);
+/// category 18 index 32: close_file_not_handle
+///
+/// Purpose: Close and delete a native open_file table handle.  The historical
+/// name is misleading: the Game.exe handler pops the handle pointer, removes it
+/// from the PAL list, frees the table buffer, then frees the handle object.
+///
+/// VM arguments:
+/// - pop[0]: handle (Handle) — handle returned by openfile.
+///
+/// Return: status integer, always 1 after attempting cleanup.
+///
+/// Side effects: ReadsFile — releases an open runtime file/table handle.
+///
+/// Evidence:
+/// - Game.sqlite: sub_4170C0 pops one handle, calls PalListDelete, PalMemoryFree
+///   on the table buffer and handle object, and returns 1.
+/// - Disassembly: docs/dis.txt 000633E0 pushes the openfile handle immediately
+///   before ext_0012_0020.close_file_not_handle.
+///
+/// Engine: Verified — runtime pops one handle and releases the portable table
+/// handle slot.
+///
+/// Decompiler: Verified — renders close_file_not_handle(handle).
+static SIG_CLOSE_FILE_NOT_HANDLE: ExtSig = sig!(18, 32, "close_file_not_handle", pop=1,
+    params=["handle":0=Handle=>"openfile handle"],
+    return=Integer, effects=[ReadsFile],
+    purpose="Close and release an open_file table/resource handle.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_4170C0 pops one handle, PalListDelete()s it, frees buffer and object, returns 1", Disassembly:"docs/dis.txt 000633E0 pushes handle before ext_0012_0020"],
+    game="0x004170C0");
 /// category 18 index 33: set_file_pointer
 ///
 /// Purpose: Seek an open resource handle to a given position.  Mirror of
@@ -2774,6 +4512,71 @@ static SIG_SET_FILE_POINTER: ExtSig = sig!(18, 33, "set_file_pointer", pop=3,
     params=["handle":0=Handle, "offset":1=Integer, "origin":2=Mode],
     return=Integer, effects=[ReadsFile], purpose="Seek an opened runtime file handle.",
     status=Blocked, decompiler=Blocked, evidence=[Writeup:"docs/writeup.md 24.9"]);
+/// category 18 index 34: file_string
+///
+/// Purpose: Copy a string payload from an open_file parsed table entry into a
+/// dynamic string slot.  File table string entries are encoded as
+/// `0x80000000 | offset`; the native handler masks the high bits, reads a
+/// u16 byte length at `handle->buffer + string_base + offset`, and copies the
+/// bytes into the destination dynamic-string storage.
+///
+/// VM arguments:
+/// - pop[0]: handle (Handle) — handle returned by openfile.
+/// - pop[1]: entry (Integer) — encoded table string entry/offset.
+/// - pop[2]: dst_slot (BufferPointer) — dynamic string slot/index.
+///
+/// Return: status/string id.  Native writes destination storage and returns 1;
+/// the portable runtime returns the dynamic string handle used by later calls.
+///
+/// Side effects: WritesVmMemory — mutates dynamic string storage.
+///
+/// Evidence:
+/// - Game.sqlite: sub_416EC0 pops handle pointer first, then entry/offset, then
+///   destination slot; it masks entry with 0x7FFFFFFF and destination with
+///   0xEFFFFFFF before copying a length-prefixed string into
+///   `a1 + 771296 + 2047 * dst`.
+/// - Disassembly: docs/dis.txt table readers leave handle on top of the stack
+///   before ext_0012_0022.file_string.
+///
+/// Engine: Verified — runtime resolves the parsed table string and updates or
+/// allocates the dynamic string slot.
+///
+/// Decompiler: Verified — renders file_string(handle, dst_slot, entry).
+static SIG_FILE_STRING: ExtSig = sig!(18, 34, "file_string", pop=3,
+    params=["handle":0=Handle=>"openfile handle", "entry":1=Integer=>"encoded string table entry", "dst_slot":2=BufferPointer=>"dynamic string destination"],
+    return=StringId, effects=[WritesVmMemory],
+    purpose="Copy a parsed open_file table string entry into dynamic string storage.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_416EC0 pops handle/entry/dst, masks entry, and copies u16-length string into dynamic string storage", Disassembly:"docs/dis.txt ext_0012_0022 callsites push three values"],
+    game="0x00416EC0");
+/// category 18 index 35: set_last_process
+///
+/// Purpose: Resolve a script point id to a process address and store it in the
+/// VM's `last_process` field.  Used by native flow-control/menu helpers.
+///
+/// VM arguments:
+/// - pop[0]: point_id (PointId) — script process/point id, or 0 to clear.
+///
+/// Return: status integer, 1.
+///
+/// Side effects: ChangesRunState — updates native VM process bookkeeping.
+///
+/// Evidence:
+/// - Game.sqlite: sub_4179B0 pops one point id, resolves it through the script
+///   point table when non-zero, stores the resolved address at a1[201019], and
+///   returns 1.
+///
+/// Engine: Blocked — portable VM records the id for trace/diagnostics; full
+/// native point-address caching is unnecessary until a caller consumes it.
+///
+/// Decompiler: Verified — renders set_last_process(point_id).
+static SIG_SET_LAST_PROCESS: ExtSig = sig!(18, 35, "set_last_process", pop=1,
+    params=["point_id":0=PointId=>"script/process point id or zero"],
+    return=Integer, effects=[ChangesRunState],
+    purpose="Store native last-process point bookkeeping.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_4179B0 pops one point id and stores resolved process address in a1[201019]"],
+    game="0x004179B0");
 /// category 18 index 36: sz_buf
 ///
 /// Purpose: Read an INI string value into the VM's dynamic string store.
@@ -2867,68 +4670,115 @@ static SIG_SAVE_THUMBNAIL_MOSAIC_SET: ExtSig = sig!(10, 12, "save_thumbnail_mosa
     status=Blocked, decompiler=Blocked,
     evidence=[GameSqlite:"reverse/Game.sqlite save dispatch index 12 pops 1", RuntimeTrace:"pal-vm dispatch_save_stub index 12 pops 1"]);
 
+/// category 10 index 13: savetimedraw
+///
+/// Purpose: Draw a save-file modification time string into a Game-managed
+/// sprite slot used by the save/load menu.
+///
+/// VM arguments (native pop order):
+/// - pop[0]: sprite_slot (SpriteSlot) — text sprite slot to create or update.
+/// - pop[1]: save_slot (SaveSlot) — save number, or -1 for continue.dat.
+/// - pop[2]: x (CoordinateX) — text sprite x coordinate.
+/// - pop[3]: y (CoordinateY) — text sprite y coordinate.
+/// - pop[4]: format_mode (Mode) — 0/2 draw colon time, 1/3 draw compact time.
+///
+/// Return: Integer — native handler returns 1 whether the save data exists or
+/// not; missing files only skip text creation.
+///
+/// Side effects: CreatesSprite, ReadsFile.
+///
+/// Evidence:
+/// - Game.sqlite/IDB: sub_431C70 logs "AdvCommandSaveTimeDraw", pops five
+///   values into v22/v25/v27/v26/v23, builds continue.dat or save%03d.dat,
+///   reads file mtime, formats HH:MM[:SS] or HHMM[SS], then calls
+///   PalSpriteCreateText/PalSpriteCreateTextEx and queues render entry
+///   0x000A000D.
+///
+/// Engine: Blocked — portable runtime now reads loose save-file metadata and
+/// creates a text sprite, but PAL's native sprite-text object and local-time
+/// conversion are approximated.
+///
+/// Decompiler: Verified — renders as savetimedraw(sprite_slot, save_slot, x,
+/// y, format_mode) with no raw fallback.
+static SIG_SAVE_TIME_DRAW: ExtSig = sig!(10, 13, "savetimedraw", pop=5,
+    params=["sprite_slot":0=SpriteSlot, "save_slot":1=Integer, "x":2=CoordinateX, "y":3=CoordinateY, "format_mode":4=Mode],
+    return=Integer, effects=[CreatesSprite, ReadsFile],
+    purpose="Draw save-file modification time text into a save/load UI sprite slot.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite/IDB sub_431C70 AdvCommandSaveTimeDraw pops sprite/save/x/y/format and calls PalSpriteCreateText"]);
+
 // Category 16 - window/effect helpers.
 
-/// category 16 index 1: ext_0010_0001 (window/effect helper)
+/// category 16 index 1: screen_shake
 ///
-/// Purpose: Four-argument window/effect setup helper used by Game.exe UI
-/// effect initialization.  Canonical name and exact effect type not reversed.
+/// Purpose: Start a native screen-shake effect.  Game.exe records the shake
+/// amplitudes, duration, and phase/mode into the effect state and marks the PAL
+/// effect pipeline active.
 ///
-/// VM arguments (display order: x, y, w, h):
-/// - pop[0]: x (CoordinateX) — region or effect x origin.
-/// - pop[1]: y (CoordinateY) — region or effect y origin.
-/// - pop[2]: w (Integer) — width parameter.
-/// - pop[3]: h (Integer) — height parameter.
-///
-/// Return: void.
-///
-/// Side effects: MutatesWindow.
-///
-/// Evidence:
-/// - Game.sqlite: reverse/Game.sqlite window/effect dispatch category 16 index 1 pops 4
-/// - RuntimeTrace: pal-vm dispatch_window_effect_stub index 1 pops 4
-///
-/// Engine: Blocked — pops 4 args; window/effect state stored.
-///
-/// Decompiler: Blocked — renders as ext_0010_0001(x, y, w, h).
-///
-/// Open points: Canonical name and effect semantics not confirmed.
-static SIG_WINDOW_EFFECT_1: ExtSig = sig!(16, 1, "ext_0010_0001", pop=4,
-    params=["x":0=CoordinateX, "y":1=CoordinateY, "w":2=Integer, "h":3=Integer],
-    return=Void, effects=[MutatesWindow],
-    purpose="Four-argument window/effect helper used by Game.exe UI effect setup.",
-    status=Blocked, decompiler=Blocked,
-    evidence=[GameSqlite:"reverse/Game.sqlite window/effect dispatch category 16 index 1 pops 4", RuntimeTrace:"pal-vm dispatch_window_effect_stub index 1 pops 4"]);
-/// category 16 index 2: ext_0010_0002 (window/effect helper)
-///
-/// Purpose: Same 4-arg window/effect helper at index 2.  May configure a
-/// different effect layer or parameter set from index 1.
-///
-/// VM arguments: identical to ext_0010_0001 (index 1).
-/// - pop[0]: x (CoordinateX)
-/// - pop[1]: y (CoordinateY)
-/// - pop[2]: w (Integer)
-/// - pop[3]: h (Integer)
+/// VM arguments:
+/// - pop[0]: x_amp (Integer) — horizontal shake amplitude.
+/// - pop[1]: y_amp (Integer) — vertical shake amplitude.
+/// - pop[2]: duration_ms (DurationMs) — shake duration; -1 disables/short-circuits.
+/// - pop[3]: phase (Mode) — fourth native shake parameter.
 ///
 /// Return: void.
 ///
-/// Side effects: MutatesWindow.
+/// Side effects: MutatesWindow, ChangesRunState.
 ///
 /// Evidence:
-/// - Game.sqlite: reverse/Game.sqlite window/effect dispatch category 16 index 2 pops 4
-/// - RuntimeTrace: pal-vm dispatch_window_effect_stub index 2 pops 4
+/// - Game.sqlite / IDB: category 16 index 1 resolves to sub_4122A0.  It pops
+///   four values into ctx[201085..201088], treats ctx[201087] as duration,
+///   sets timing/dirty flags, calls sub_44A010, and logs "shake %d,%d,%d,%d".
+/// - PAL.sqlite: PalEffectEnableIs guards the native effect pipeline.
 ///
-/// Engine: Blocked — pops 4 args.
+/// Engine: Blocked — pal-vm now records the shake timer/state, but renderer-wide
+/// viewport offset still needs native-equivalent integration.
 ///
-/// Decompiler: Blocked — renders as ext_0010_0002(x, y, w, h).
+/// Decompiler: Verified — renders as screen_shake(x_amp, y_amp, duration_ms,
+/// phase).
+static SIG_WINDOW_EFFECT_1: ExtSig = sig!(16, 1, "screen_shake", pop=4,
+    params=["x_amp":0=Integer, "y_amp":1=Integer, "duration_ms":2=DurationMs, "phase":3=Mode],
+    return=Void, effects=[MutatesWindow, ChangesRunState],
+    purpose="Start a native screen-shake effect.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_4122A0 pops four shake args, stores ctx[201085..201088], and logs shake", PalSqlite:"reverse/PAL.sqlite PalEffectEnableIs 0x101195A9 guards effect availability"],
+    game="0x004122A0", pal="PalEffectEnableIs" => "0x101195A9");
+/// category 16 index 2: screen_flash
 ///
-/// Open points: Canonical name and difference from index 1 not confirmed.
-static SIG_WINDOW_EFFECT_2: ExtSig = sig!(16, 2, "ext_0010_0002", pop=4,
-    params=["x":0=CoordinateX, "y":1=CoordinateY, "w":2=Integer, "h":3=Integer],
-    return=Void, effects=[MutatesWindow],
-    purpose="Four-argument window/effect helper used by Game.exe UI effect setup.",
-    status=Blocked, decompiler=Blocked,
-    evidence=[GameSqlite:"reverse/Game.sqlite window/effect dispatch category 16 index 2 pops 4", RuntimeTrace:"pal-vm dispatch_window_effect_stub index 2 pops 4"]);
+/// Purpose: Create a full-screen flash/fill overlay.  Native creates a
+/// full-screen PAL sprite, paints it with RGB, records duration/start time, and
+/// marks the effect pipeline active.
+///
+/// VM arguments:
+/// - pop[0]: red (Color) — red component, 0..255.
+/// - pop[1]: green (Color) — green component, 0..255.
+/// - pop[2]: blue (Color) — blue component, 0..255.
+/// - pop[3]: duration_ms (DurationMs) — fade/hold duration.
+///
+/// Return: void.
+///
+/// Side effects: MutatesWindow, CreatesSprite, ChangesRunState.
+///
+/// Evidence:
+/// - Game.sqlite / IDB: category 16 index 2 resolves to sub_4120C0.  It pops
+///   duration/R/G/B, creates a 1920x1080 PAL sprite on the active render target,
+///   calls PalSpritePaint with the packed RGB color, records duration/start
+///   time, and logs "flush 0x%06X".
+/// - PAL.sqlite: PalEffectEnableIs guards the native effect pipeline.
+///
+/// Engine: Verified — pal-vm renders a logical full-screen colored quad with
+/// the same timing, using configured logical coordinates instead of a hard-coded
+/// native 1920x1080 surface.
+///
+/// Decompiler: Verified — renders as screen_flash(red, green, blue,
+/// duration_ms).
+static SIG_WINDOW_EFFECT_2: ExtSig = sig!(16, 2, "screen_flash", pop=4,
+    params=["red":0=Color, "green":1=Color, "blue":2=Color, "duration_ms":3=DurationMs],
+    return=Void, effects=[MutatesWindow, CreatesSprite, ChangesRunState],
+    purpose="Create a full-screen PAL flash/fill overlay.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_4120C0 creates full-screen sprite, PalSpritePaints RGB, stores duration/start time, and logs flush", PalSqlite:"reverse/PAL.sqlite PalEffectEnableIs 0x101195A9 guards effect availability"],
+    game="0x004120C0", pal="PalEffectEnableIs" => "0x101195A9");
 
 // Category 20 - random.
 
@@ -2959,39 +4809,124 @@ static SIG_RANDOM: ExtSig = sig!(20, 0, "random", pop=2,
     status=Blocked, decompiler=Blocked,
     evidence=[GameSqlite:"reverse/Game.sqlite random wrapper", RuntimeTrace:"pal-vm dispatch_random_ext index 0 pops 2"]);
 
+// Category 21 - script thread state.
+
+/// category 21 index 0: create_thread
+///
+/// Purpose: Start the native lightweight script-thread state at a target script
+/// point.  The handler writes VM thread fields rather than creating an OS
+/// thread.
+///
+/// VM arguments:
+/// - pop[0]: point_id (PointId) — target script point id.
+///
+/// Return: status integer, 1.
+///
+/// Side effects: ChangesRunState.
+///
+/// Evidence: Game.sqlite VmExtcall_CreateThread 0x0042E900 pops one point id,
+/// sets ctx_off_thread_active/running, resolves target pc when non-zero, stores
+/// ctx_off_thread_id, and returns 1.
+static SIG_CREATE_THREAD: ExtSig = sig!(21, 0, "create_thread", pop=1,
+    params=["point_id":0=PointId=>"target script point id"],
+    return=Integer, effects=[ChangesRunState],
+    purpose="Start native script-thread scheduler state at a point id.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite VmExtcall_CreateThread 0x0042E900 pops point id and writes thread active/running/target/id fields"],
+    game="0x0042E900");
+/// category 21 index 1: exit_thread
+///
+/// Purpose: Clear native script-thread state.  No stack arguments are consumed.
+///
+/// Return: status integer, 1.
+///
+/// Side effects: ChangesRunState.
+///
+/// Evidence: Game.sqlite VmExtcall_ExitThread 0x0042E8C0 clears the thread
+/// state OWORD and thread id.
+static SIG_EXIT_THREAD: ExtSig = sig!(21, 1, "exit_thread", pop=0,
+    params=[],
+    return=Integer, effects=[ChangesRunState],
+    purpose="Clear native script-thread scheduler state.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite VmExtcall_ExitThread 0x0042E8C0 clears thread state and returns 1"],
+    game="0x0042E8C0");
+/// category 21 index 2: suspend_thread
+///
+/// Purpose: Replace the native thread-running flag and return its previous
+/// value.  Scripts use this around menu/title flow to restore scheduler state.
+///
+/// VM arguments:
+/// - pop[0]: running (Flag) — new thread-running state.
+///
+/// Return: integer previous running flag.
+///
+/// Side effects: WritesVmMemory, ChangesRunState.
+///
+/// Evidence: Game.sqlite VmExtcall_SuspendThread 0x0042E860 pops one value,
+/// writes the old ctx_off_thread_running to the return slot, then stores the
+/// popped value as the new running state.
+static SIG_SUSPEND_THREAD: ExtSig = sig!(21, 2, "suspend_thread", pop=1,
+    params=["running":0=Flag=>"new native thread-running flag"],
+    return=Integer, effects=[WritesVmMemory, ChangesRunState],
+    purpose="Set native script-thread running flag and return the previous value.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite VmExtcall_SuspendThread 0x0042E860 pops one running flag, returns old running flag, stores new value"],
+    game="0x0042E860");
+/// category 21 index 3: get_thread
+///
+/// Purpose: Return the current native script-thread id/point id.
+///
+/// VM arguments: none.
+///
+/// Return: integer current thread id.
+///
+/// Side effects: WritesVmMemory.
+///
+/// Evidence: Game.sqlite VmExtcall_GetThread 0x0042E9A0 writes
+/// ctx_off_thread_id to the extcall destination.
+static SIG_GET_THREAD: ExtSig = sig!(21, 3, "get_thread", pop=0,
+    params=[],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Return current native script-thread id.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite VmExtcall_GetThread 0x0042E9A0 returns ctx_off_thread_id"],
+    game="0x0042E9A0");
+
 // Category 22 - run/effect transition state.
 
 /// category 22 index 0: run
 ///
-/// Purpose: Execute a scene/effect transition and wait for it to complete.
-/// Blocks the script until the named effect finishes.
+/// Purpose: Execute a scene/effect transition.  Game.exe records the run
+/// duration in VM timing fields; the PAL API call itself is non-waiting.
 ///
 /// VM arguments (display order: effect_id, arg1, arg2):
 /// - pop[0]: effect_id (Integer) — transition effect identifier.
-/// - pop[1]: arg1 (Integer) — effect-specific parameter 1.
-/// - pop[2]: arg2 (Integer) — effect-specific parameter 2.
+/// - pop[1]: duration_ms (DurationMs) — transition/effect duration.
+/// - pop[2]: effect_arg (Integer) — effect-specific argument.
 ///
 /// Return: void.
 ///
 /// Side effects: ChangesRunState, BlocksScript.
 ///
 /// Evidence:
-/// - Game.sqlite: sub_421FD0 pops effect_id/arg1/arg2, validates
-///   effect_id<=100, calls PalEffectEx(effect_id,arg1,arg2,0), updates run
-///   timing fields, and returns 1 (0 only on invalid/blocked native setup).
+/// - Game.sqlite: sub_421FD0 pops effect_id/duration/effect_arg, validates
+///   effect_id<=100, calls PalEffectEx(effect_id,duration,effect_arg,0),
+///   updates run timing fields, and returns 1 (0 only on invalid/blocked native setup).
 /// - PAL.sqlite: PalEffectEx 0x1011A1E8.
 /// - RuntimeTrace: pal-vm dispatch_run_ext index 0 pops 3 and returns 1 after
 ///   setting the compatible transition pipeline.
 ///
 /// Engine: Verified — stores the effect triple in the compatible run pipeline,
-/// blocks through WaitRequest::Time, and mirrors native queued run-stack mode.
+/// passes PAL wait=0, uses the recorded duration for the VM-side wait/yield, and
+/// mirrors native queued run-stack mode.
 ///
 /// Decompiler: Verified — renders as run(effect_id, arg1, arg2).
 static SIG_RUN: ExtSig = sig!(22, 0, "run", pop=3,
-    params=["effect_id":0=Integer, "arg1":1=Integer, "arg2":2=Integer],
+    params=["effect_id":0=Integer, "duration_ms":1=DurationMs, "effect_arg":2=Integer],
     return=Void, effects=[ChangesRunState, BlocksScript], purpose="Run a scene/effect transition and wait for it.",
     status=Verified, decompiler=Verified,
-    evidence=[GameSqlite:"reverse/Game.sqlite sub_421FD0 pops effect_id/arg1/arg2 and calls PalEffectEx(effect_id,arg1,arg2,0)", PalSqlite:"PalEffectEx 0x1011A1E8", RuntimeTrace:"pal-vm dispatch_run_ext index 0 pops 3 and updates run pipeline"],
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_421FD0 pops effect_id/duration/effect_arg and calls PalEffectEx(effect_id,duration,effect_arg,0)", PalSqlite:"PalEffectEx 0x1011A1E8", RuntimeTrace:"pal-vm dispatch_run_ext index 0 pops 3 and updates run pipeline"],
     game="0x00421FD0", pal="PalEffectEx" => "0x1011A1E8");
 /// category 22 index 1: run_no_wait
 ///
@@ -3051,42 +4986,229 @@ static SIG_RUN_STACK: ExtSig = sig!(22, 2, "run_stack", pop=1,
     evidence=[GameSqlite:"reverse/Game.sqlite sub_422160 pops enabled, toggles run-stack, and conditionally calls PalEffectEx for queued effects", PalSqlite:"PalEffectEx 0x1011A1E8", RuntimeTrace:"pal-vm dispatch_run_ext index 2 pops enabled and flushes pending transition"],
     game="0x00422160", pal="PalEffectEx" => "0x1011A1E8");
 
+/// Remaining reachable semantic promotions from the latest IDB extcall table.
+static SIG_TEXT_TASK_FREE: ExtSig = sig!(2, 26, "text_task_free", pop=0,
+    params=[], return=Integer, effects=[ChangesTextState],
+    purpose="Free native text reveal/task state.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite VmExtcall_TextTaskFree 0x0043E550 pops no args and frees text task"],
+    game="0x0043E550");
+static SIG_TEXT_SPRITE_LOCK: ExtSig = sig!(2, 27, "text_sprite_lock", pop=0,
+    params=[], return=Integer, effects=[ChangesTextState, MutatesSprite],
+    purpose="Lock native text sprite and clear alpha bytes.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite VmExtcall_TextSpriteLock 0x0043E4A0 pops no args and locks/edits text sprite pixels"],
+    game="0x0043E4A0");
+static SIG_TEXT_TASK_REDRAW_FLAG: ExtSig = sig!(2, 13, "text_task_redraw_flag", pop=0,
+    params=[], return=Integer, effects=[ChangesTextState],
+    purpose="Set the native ADV text redraw flag at text context +4192.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_43EE00 consumes no args and writes text_ctx+4192 = 1"],
+    game="0x0043EE00");
+static SIG_INPUT_MOUSE_TO_MEM: ExtSig = sig!(9, 12, "input_mouse_to_mem", pop=2,
+    params=["dst_x":0=BufferPointer=>"Mem.dat destination for mouse x or -1", "dst_y":1=BufferPointer=>"Mem.dat destination for mouse y or -1"],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Write mouse x/y into Mem.dat destinations.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_438770 pops dst_x/dst_y and writes PalInputGetMouseX/Y to Mem.dat"],
+    game="0x00438770");
+static SIG_MEMORY_BANK_CLEAR: ExtSig = sig!(9, 14, "memory_bank_clear", pop=0,
+    params=[], return=Integer, effects=[WritesVmMemory],
+    purpose="Clear native VM scratch memory bank.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_438460 memset(ctx+711860,0,0x1000) and pops no args"],
+    game="0x00438460");
+static SIG_CANCEL_SCENE_SKIP: ExtSig = sig!(9, 52, "cancel_scene_skip", pop=0,
+    params=[], return=Integer, effects=[ChangesRunState],
+    purpose="Cancel native scene-skip latch and update save-point state.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_437150 consumes no args and clears ctx[201064] when scene skip is active"],
+    game="0x00437150");
+static SIG_SYSTEM_SCRATCH_CLEAR: ExtSig = sig!(9, 25, "system_scratch_clear", pop=0,
+    params=[], return=Integer, effects=[WritesVmMemory],
+    purpose="Clear Game.exe ctx+804244 system/list scratch latch.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_437BA0 consumes no args and writes ctx+804244 = 0"],
+    game="0x00437BA0");
+static SIG_SYSTEM_SCRATCH_GET: ExtSig = sig!(9, 26, "system_scratch_get", pop=0,
+    params=[], return=Integer, effects=[WritesVmMemory],
+    purpose="Return Game.exe ctx+804244 system/list scratch latch.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_437B80 consumes no args and writes ctx+804244 to the extcall destination"],
+    game="0x00437B80");
+static SIG_HISTORY_SCROLL: ExtSig = sig!(14, 3, "history_scroll", pop=0,
+    params=[], return=Integer, effects=[WritesVmMemory],
+    purpose="Return native history scroll/current offset.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite VmExtcall_HistScroll 0x0042BA80 returns ctx+88444"],
+    game="0x0042BA80");
+static SIG_HISTORY_UPDATE: ExtSig = sig!(14, 6, "history_update", pop=0,
+    params=[], return=Integer, effects=[ChangesHistoryState],
+    purpose="Update interactive history/backlog hover/voice state.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite VmExtcall_HistUpdate 0x0042B7C0 pops no args and updates history sprite hover/voice playback"],
+    game="0x0042B7C0");
+static SIG_STR_APPEND: ExtSig = sig!(18, 4, "strcatf_string", pop=2,
+    params=["dst":0=BufferPointer=>"dynamic string destination", "src":1=TextStringFromTextDat=>"string to append"],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Append resolved string to dynamic string buffer.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_41A850 pops dst/src and appends resolved string to dynamic buffer"],
+    game="0x0041A850");
+static SIG_STR_COPY_LEN: ExtSig = sig!(18, 7, "strcpyf_string", pop=3,
+    params=["dst":0=BufferPointer=>"dynamic string destination", "src":1=TextStringFromTextDat=>"source string", "len":2=Integer=>"copy length or -1 for full"],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Copy resolved string to dynamic string buffer with optional length.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_41A4B0 pops dst/src/len and strncpy()s into dynamic buffer"],
+    game="0x0041A4B0");
+static SIG_SYSTEM_TASK_VALUE: ExtSig = sig!(18, 15, "system_task_value", pop=0,
+    params=[], return=Integer, effects=[WritesVmMemory],
+    purpose="Return native task-data value when the system latch is active.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_417BD0 pops no args and returns PalTaskGetTaskData(0)+820 when dword_4BD0C0 is set"],
+    game="0x00417BD0");
+/// category 18 index 17: work_process_value
+///
+/// Purpose: Query/update the native background work-process value used by
+/// startup disc/system checks.
+///
+/// VM arguments:
+/// - pop[0]: arg_base_value (Integer) — value passed through the current
+///   argument-base wrapper.
+///
+/// Return: integer — native helper result.
+///
+/// Side effects: WritesVmMemory, ChangesRunState.
+///
+/// Evidence:
+/// - Game.sqlite: sub_417AF0 calls sub_44A6C0(&value), writes the result to the
+///   extcall return slot, and sets ctx+804084 dirty.
+/// - Disassembly: docs/dis.txt 0002CE0C pushes arg_base+64 before
+///   ext_0012_0011.
+///
+/// Engine: Blocked — exact sub_44A6C0 internals are not fully modeled; runtime
+/// preserves argument/result flow with the current portable work-process state.
+///
+/// Decompiler: Verified — renders work_process_value(arg_base_value), not raw
+/// ext_0012_0011.
+static SIG_WORK_PROCESS_VALUE: ExtSig = sig!(18, 17, "work_process_value", pop=1,
+    params=["arg_base_value":0=Integer=>"argument-base value passed to native helper"],
+    return=Integer, effects=[WritesVmMemory, ChangesRunState],
+    purpose="Query/update native background work-process value.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_417AF0 calls sub_44A6C0(&value), returns value, and sets +804084", Disassembly:"docs/dis.txt 0002CE0C pushes arg_base+64 before ext_0012_0011"],
+    game="0x00417AF0");
+static SIG_STR_REPLACE: ExtSig = sig!(18, 18, "strreplace_string", pop=3,
+    params=["dst":0=BufferPointer=>"dynamic string destination", "needle":1=TextStringFromTextDat=>"substring to replace", "replacement":2=TextStringFromTextDat=>"replacement string"],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Replace first substring occurrence in dynamic string buffer.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_41A330 pops dst/needle/replacement and memmove()s replacement into the dynamic string"],
+    game="0x0041A330");
+static SIG_ACCESS_CLEAR: ExtSig = sig!(18, 40, "access_clear", pop=1,
+    params=["entry":0=Integer=>"access flag id or resource string"],
+    return=Integer, effects=[WritesVmMemory],
+    purpose="Clear native access/read flag entry.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_417E50 pops one id/string and clears the corresponding access flag"],
+    game="0x00417E50");
+static SIG_ACTION_TIMELINE_17_REAL: ExtSig = sig!(17, 17, "action_timeline_17", pop=5,
+    params=["line":0=Integer, "sprite":1=SpriteSlot, "arg2":2=Integer, "arg3":3=Integer, "duration":4=DurationMs],
+    return=Integer, effects=[CreatesTask, MutatesSprite],
+    purpose="Append native action timeline entry type 10.",
+    status=Verified, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite VmExtcall_ActionTimeline17 0x0040A650 pops line plus four action args and stores type 10"],
+    game="0x0040A650");
+static SIG_EFFECT_STOP_SKIP: ExtSig = sig!(16, 0, "effect_stop_skip", pop=0,
+    params=[], return=Integer, effects=[ChangesRunState, MutatesWindow],
+    purpose="Stop native transition/effect channels during skip/menu teardown.",
+    status=Blocked, decompiler=Verified,
+    evidence=[GameSqlite:"reverse/Game.sqlite sub_412450 reads two native arg-stack fields (flags,duration) and stops selected effect channels; reachable script wrapper is zero-arg effect_stop_skip()"],
+    game="0x00412450");
+
 pub fn lookup_sig(category: u16, index: u16) -> Option<&'static ExtSig> {
     match (category, index) {
         (2, 2) => Some(&SIG_TEXT),
         (2, 3) => Some(&SIG_TEXT_HIDE),
         (2, 4) => Some(&SIG_TEXT_SHOW),
+        (2, 5) => Some(&SIG_TEXT_SET_BTN),
         (2, 8) => Some(&SIG_TEXT_CLEAR),
+        (2, 9) => Some(&SIG_TEXT_CLEAR_EX),
+        (2, 10) => Some(&SIG_TEXT_GET_TIME),
+        (2, 13) => Some(&SIG_TEXT_TASK_REDRAW_FLAG),
+        (2, 14) => Some(&SIG_TEXT_SET_ICON_ANIMATION_TIME),
         (2, 15) => Some(&SIG_TEXT_W),
         (2, 16) => Some(&SIG_TEXT_A),
         (2, 17) => Some(&SIG_TEXT_WA),
         (2, 22) => Some(&SIG_TEXT_SET_BASE),
+        (2, 25) => Some(&SIG_TEXT_TIME_CHECK_SET),
+        (2, 26) => Some(&SIG_TEXT_TASK_FREE),
+        (2, 27) => Some(&SIG_TEXT_SPRITE_LOCK),
+        (2, 28) => Some(&SIG_TEXT_SET_COLOR),
         (3, 2) => Some(&SIG_SP_SET),
         (3, 3) => Some(&SIG_SP_SET_EX),
         (3, 4) => Some(&SIG_SP_SET_POS),
         (3, 5) => Some(&SIG_SP_CLS),
         (3, 6) => Some(&SIG_SP_SET_ALPHA),
+        (3, 7) => Some(&SIG_SP_SET_PRIORITY_LANE),
+        (3, 8) => Some(&SIG_SP_GET_FILENAME),
+        (3, 9) => Some(&SIG_SP_SET_CENTER),
         (3, 11) => Some(&SIG_SP_CLS_EX),
         (3, 12) => Some(&SIG_SP_SET_FILTER),
+        (3, 16) => Some(&SIG_SP_SET_RENDER_MODE),
+        (3, 15) => Some(&SIG_SP_SET_RECT_POS),
         (3, 17) => Some(&SIG_SP_SET_SCALE),
+        (3, 18) => Some(&SIG_SP_SET_ROTATE),
+        (3, 19) => Some(&SIG_FACE_INIT),
+        (3, 20) => Some(&SIG_FACE_SET),
+        (3, 21) => Some(&SIG_SP_GET_COLOR),
         (3, 22) => Some(&SIG_SPTEXT),
+        (3, 23) => Some(&SIG_FACE_CLS),
+        (3, 24) => Some(&SIG_SP_SET_RECT),
         (3, 25) => Some(&SIG_SP_SET_POS_MOVE),
+        (3, 26) => Some(&SIG_SP_GET_ALPHA),
+        (3, 27) => Some(&SIG_SP_GET_ROTATE),
+        (3, 28) => Some(&SIG_SP_GET_POS_TO_MEM),
+        (3, 29) => Some(&SIG_SP_GET_WIDTH),
+        (3, 30) => Some(&SIG_SP_GET_HEIGHT),
+        (3, 31) => Some(&SIG_SP_SET_ANIM2),
+        (3, 34) => Some(&SIG_SP_SET_ANIM_PARAM),
+        (3, 35) => Some(&SIG_SP_GET_ANIM_PARAM),
+        (3, 36) => Some(&SIG_SP_GET_SCALE),
+        (3, 37) => Some(&SIG_SP_SET_COLOR_SPRITE),
         (3, 39) => Some(&SIG_SP_SET_SHAKE),
         (3, 41) => Some(&SIG_SP_SET_ANIM_41),
+        (3, 44) => Some(&SIG_SP_SET_VIS_CLIP),
         (3, 46) => Some(&SIG_SP_SHOW),
         (3, 47) => Some(&SIG_SP_HIDE),
+        (3, 48) => Some(&SIG_IS_SP),
+        (3, 49) => Some(&SIG_SP_SET_CHILD),
+        (3, 50) => Some(&SIG_SP_SET_TRANSITION_HOT),
+        (3, 51) => Some(&SIG_SP_COPY_IMAGE_HOT),
+        (3, 52) => Some(&SIG_SP_TRANSITION_HOT),
+        (3, 53) => Some(&SIG_SP_SET_ASPECT_POSITION_TYPE),
+        (3, 54) => Some(&SIG_SP_GET_BACKBUFFER),
+        (3, 55) => Some(&SIG_SP_SET_MOTION),
+        (3, 56) => Some(&SIG_SP_SET_MOTION_POS),
         (3, 57) => Some(&SIG_SP_SET_ANIM_57),
         (4, 0) => Some(&SIG_BGM_PLAY),
         (4, 1) => Some(&SIG_BGM_STOP),
         (4, 2) => Some(&SIG_BGM_SET_VOLUME),
         (4, 3) => Some(&SIG_BGM_GET_VOLUME),
+        (4, 6) => Some(&SIG_BGM_SET_AUTO_VOLUME),
         (4, 9) => Some(&SIG_BGM_LOAD),
+        (4, 11) => Some(&SIG_SET_MASTER_VOLUME),
+        (4, 13) => Some(&SIG_MUTE_MASTER_VOLUME),
+        (4, 14) => Some(&SIG_BGM_MUTE),
+        (4, 15) => Some(&SIG_MUTE_BGM_AUTO_VOLUME),
         (5, 0) => Some(&SIG_SE_LOAD),
         (5, 1) => Some(&SIG_SE_PLAY),
         (5, 2) => Some(&SIG_SE_PLAY_EX),
         (5, 3) => Some(&SIG_SE_STOP),
         (5, 4) => Some(&SIG_SE_SET_VOLUME),
         (5, 5) => Some(&SIG_SE_GET_VOLUME),
+        (5, 14) => Some(&SIG_SE_MUTE),
         (7, 0) => Some(&SIG_WAIT),
         (7, 1) => Some(&SIG_WAIT_CLICK),
         (7, 2) => Some(&SIG_WAIT_SYNC_BEGIN),
@@ -3099,6 +5221,7 @@ pub fn lookup_sig(category: u16, index: u16) -> Option<&'static ExtSig> {
         (7, 10) => Some(&SIG_WAIT_TIME_POP),
         (6, 0) => Some(&SIG_SELECT_INIT),
         (6, 2) => Some(&SIG_SELECT_SET),
+        (6, 3) => Some(&SIG_SELECT_COMMIT),
         (6, 4) => Some(&SIG_SELECT_CLEAR),
         (8, 0) => Some(&SIG_BTN_INIT),
         (8, 1) => Some(&SIG_BTN_UNINIT),
@@ -3120,7 +5243,38 @@ pub fn lookup_sig(category: u16, index: u16) -> Option<&'static ExtSig> {
         (8, 20) => Some(&SIG_BTN_UNLOCK),
         (8, 21) => Some(&SIG_BTN_SET_ANIM),
         (8, 22) => Some(&SIG_BTN_SET_HIT),
-        (9, 9) => Some(&SIG_FONT_SYSTEM_QUERY_9),
+        (8, 23) => Some(&SIG_BTN_GET_ONMOUSE),
+        (9, 0) => Some(&SIG_SKIP_SET),
+        (9, 1) => Some(&SIG_SKIP_IS),
+        (9, 2) => Some(&SIG_AUTO_SET),
+        (9, 3) => Some(&SIG_AUTO_IS),
+        (9, 4) => Some(&SIG_AUTO_SET_SPEED),
+        (9, 6) => Some(&SIG_WINDOW_CHANGE_MODE),
+        (9, 7) => Some(&SIG_WINDOW_SET_MODE_CACHE),
+        (9, 8) => Some(&SIG_EFFECT_ENABLE),
+        (9, 9) => Some(&SIG_EFFECT_ENABLE_IS),
+        (9, 10) => Some(&SIG_WINDOW_GET_MODE_CACHE),
+        (9, 12) => Some(&SIG_INPUT_MOUSE_TO_MEM),
+        (9, 14) => Some(&SIG_MEMORY_BANK_CLEAR),
+        (9, 17) => Some(&SIG_SET_LANGUAGE),
+        (9, 18) => Some(&SIG_INPUT_KEY_CANCEL),
+        (9, 19) => Some(&SIG_SET_FONT_COLOR),
+        (9, 20) => Some(&SIG_LOAD_FONT_EX),
+        (9, 21) => Some(&SIG_MEMORY_STACK_PUSH),
+        (9, 22) => Some(&SIG_MEMORY_STACK_POP),
+        (9, 23) => Some(&SIG_LIST_STACK_PUSH_POINT),
+        (9, 24) => Some(&SIG_LIST_STACK_POP_COUNT),
+        (9, 25) => Some(&SIG_SYSTEM_SCRATCH_CLEAR),
+        (9, 26) => Some(&SIG_SYSTEM_SCRATCH_GET),
+        (9, 27) => Some(&SIG_SET_FONT_SIZE),
+        (9, 28) => Some(&SIG_GET_FONT_SIZE),
+        (9, 29) => Some(&SIG_GET_FONT_TYPE),
+        (9, 30) => Some(&SIG_SET_FONT_EFFECT),
+        (9, 31) => Some(&SIG_GET_FONT_EFFECT),
+        (9, 52) => Some(&SIG_CANCEL_SCENE_SKIP),
+        (9, 53) => Some(&SIG_LIST_STACK_GET_COUNT),
+        (15, 4) => Some(&SIG_SYSTEM_WINDOW_OVERLAY_SET),
+        (15, 5) => Some(&SIG_DEBUG_WINDOW_SET),
         (12, 0) => Some(&SIG_SYSTEM_BTN_SET),
         (12, 1) => Some(&SIG_SYSTEM_BTN_RELEASE),
         (12, 2) => Some(&SIG_SYSTEM_BTN_ENABLE),
@@ -3134,28 +5288,67 @@ pub fn lookup_sig(category: u16, index: u16) -> Option<&'static ExtSig> {
         (13, 1) => Some(&SIG_VOICE_STOP),
         (13, 2) => Some(&SIG_VOICE_SET_VOLUME),
         (13, 3) => Some(&SIG_VOICE_GET_VOLUME),
+        (13, 7) => Some(&SIG_VOICE_PLAY_FADE),
         (13, 16) => Some(&SIG_VOICE_AUTOPAN_SIZE_OVER),
         (13, 18) => Some(&SIG_VOICE_WAIT),
         (10, 12) => Some(&SIG_SAVE_THUMBNAIL_MOSAIC_SET),
+        (10, 13) => Some(&SIG_SAVE_TIME_DRAW),
+        (14, 3) => Some(&SIG_HISTORY_SCROLL),
+        (14, 6) => Some(&SIG_HISTORY_UPDATE),
+        (16, 0) => Some(&SIG_EFFECT_STOP_SKIP),
         (16, 1) => Some(&SIG_WINDOW_EFFECT_1),
         (16, 2) => Some(&SIG_WINDOW_EFFECT_2),
         (17, 0) => Some(&SIG_ACTION_RUN_COUNT_OVER),
         (17, 1) => Some(&SIG_ACTION_SYNC_RUN_COUNT_OVER),
         (17, 3) => Some(&SIG_ACTION_CLEAR_COUNT_OVER),
         (17, 5) => Some(&SIG_ACTION_TIMELINE_5),
+        (17, 6) => Some(&SIG_ACTION_TIMELINE_6),
+        (17, 7) => Some(&SIG_ACTION_TIMELINE_7),
         (17, 8) => Some(&SIG_ACTION_TIMELINE_8),
         (17, 9) => Some(&SIG_ACTION_TIMELINE_9),
+        (17, 10) => Some(&SIG_ACTION_TIMELINE_10),
         (17, 11) => Some(&SIG_ACTION_TIMELINE_11),
+        (17, 14) => Some(&SIG_ACTION_TIMELINE_14),
+        (17, 15) => Some(&SIG_ACTION_TIMELINE_15),
+        (17, 17) => Some(&SIG_ACTION_TIMELINE_17_REAL),
+        (17, 20) => Some(&SIG_ACTION_TIMELINE_20),
+        (17, 21) => Some(&SIG_ACTION_PUSH),
+        (17, 22) => Some(&SIG_ACTION_POP),
         (17, 23) => Some(&SIG_ACTION_SET_ACTIVE),
         (17, 29) => Some(&SIG_ACTION_TIMELINE_29),
         (17, 30) => Some(&SIG_ACTION_SET_CLEAR),
+        (18, 1) => Some(&SIG_APP_EXEC),
+        (18, 3) => Some(&SIG_STRING_NOT_EQUAL),
+        (18, 4) => Some(&SIG_STR_APPEND),
+        (18, 5) => Some(&SIG_STRGETCF),
         (18, 6) => Some(&SIG_ARG_GET),
+        (18, 7) => Some(&SIG_STR_COPY_LEN),
+        (18, 8) => Some(&SIG_FILE_EXIST),
+        (18, 9) => Some(&SIG_WSPRINT),
+        (18, 10) => Some(&SIG_CHECK_DISC),
+        (18, 12) => Some(&SIG_STRING_LENGTH),
+        (18, 13) => Some(&SIG_PROCESS_CHECKPOINT_SET),
+        (18, 14) => Some(&SIG_UPDATE_ACCESS),
+        (18, 15) => Some(&SIG_SYSTEM_TASK_VALUE),
+        (18, 17) => Some(&SIG_WORK_PROCESS_VALUE),
+        (18, 18) => Some(&SIG_STR_REPLACE),
+        (18, 21) => Some(&SIG_STRING_NON_EMPTY),
+        (18, 28) => Some(&SIG_ATTACH_WORK_PROCESS),
+        (18, 29) => Some(&SIG_DETACH_WORK_PROCESS),
         (18, 30) => Some(&SIG_OPENFILE),
         (18, 31) => Some(&SIG_READ_FILE),
+        (18, 32) => Some(&SIG_CLOSE_FILE_NOT_HANDLE),
         (18, 33) => Some(&SIG_SET_FILE_POINTER),
+        (18, 34) => Some(&SIG_FILE_STRING),
+        (18, 35) => Some(&SIG_SET_LAST_PROCESS),
         (18, 36) => Some(&SIG_SZ_BUF),
         (18, 37) => Some(&SIG_GETPRIVATEPROFILEINT),
+        (18, 40) => Some(&SIG_ACCESS_CLEAR),
         (20, 0) => Some(&SIG_RANDOM),
+        (21, 0) => Some(&SIG_CREATE_THREAD),
+        (21, 1) => Some(&SIG_EXIT_THREAD),
+        (21, 2) => Some(&SIG_SUSPEND_THREAD),
+        (21, 3) => Some(&SIG_GET_THREAD),
         (22, 0) => Some(&SIG_RUN),
         (22, 1) => Some(&SIG_RUN_NO_WAIT),
         (22, 2) => Some(&SIG_RUN_STACK),
@@ -3167,37 +5360,83 @@ static ALL_SIGNATURES: &[&ExtSig] = &[
     &SIG_TEXT,
     &SIG_TEXT_HIDE,
     &SIG_TEXT_SHOW,
+    &SIG_TEXT_SET_BTN,
     &SIG_TEXT_CLEAR,
+    &SIG_TEXT_CLEAR_EX,
+    &SIG_TEXT_GET_TIME,
+    &SIG_TEXT_TASK_REDRAW_FLAG,
+    &SIG_TEXT_SET_ICON_ANIMATION_TIME,
     &SIG_TEXT_W,
     &SIG_TEXT_A,
     &SIG_TEXT_WA,
     &SIG_TEXT_SET_BASE,
+    &SIG_TEXT_TIME_CHECK_SET,
+    &SIG_TEXT_TASK_FREE,
+    &SIG_TEXT_SPRITE_LOCK,
+    &SIG_TEXT_SET_COLOR,
     &SIG_SP_SET,
     &SIG_SP_SET_EX,
     &SIG_SP_SET_POS,
     &SIG_SP_CLS,
     &SIG_SP_SET_ALPHA,
+    &SIG_SP_SET_PRIORITY_LANE,
+    &SIG_SP_GET_FILENAME,
+    &SIG_SP_SET_CENTER,
     &SIG_SP_CLS_EX,
     &SIG_SP_SET_FILTER,
+    &SIG_SP_SET_RENDER_MODE,
+    &SIG_SP_SET_RECT_POS,
     &SIG_SP_SET_SCALE,
+    &SIG_SP_SET_ROTATE,
+    &SIG_FACE_INIT,
+    &SIG_FACE_SET,
+    &SIG_SP_GET_COLOR,
     &SIG_SPTEXT,
+    &SIG_FACE_CLS,
+    &SIG_SP_SET_RECT,
     &SIG_SP_SET_POS_MOVE,
+    &SIG_SP_GET_ALPHA,
+    &SIG_SP_GET_ROTATE,
+    &SIG_SP_GET_POS_TO_MEM,
+    &SIG_SP_GET_WIDTH,
+    &SIG_SP_GET_HEIGHT,
+    &SIG_SP_SET_ANIM2,
+    &SIG_SP_SET_ANIM_PARAM,
+    &SIG_SP_GET_ANIM_PARAM,
+    &SIG_SP_GET_SCALE,
+    &SIG_SP_SET_COLOR_SPRITE,
     &SIG_SP_SET_SHAKE,
     &SIG_SP_SET_ANIM_41,
+    &SIG_SP_SET_VIS_CLIP,
     &SIG_SP_SHOW,
     &SIG_SP_HIDE,
+    &SIG_IS_SP,
+    &SIG_SP_SET_CHILD,
+    &SIG_SP_SET_TRANSITION_HOT,
+    &SIG_SP_COPY_IMAGE_HOT,
+    &SIG_SP_TRANSITION_HOT,
+    &SIG_SP_SET_ASPECT_POSITION_TYPE,
+    &SIG_SP_GET_BACKBUFFER,
+    &SIG_SP_SET_MOTION,
+    &SIG_SP_SET_MOTION_POS,
     &SIG_SP_SET_ANIM_57,
     &SIG_BGM_PLAY,
     &SIG_BGM_STOP,
     &SIG_BGM_SET_VOLUME,
     &SIG_BGM_GET_VOLUME,
+    &SIG_BGM_SET_AUTO_VOLUME,
     &SIG_BGM_LOAD,
+    &SIG_SET_MASTER_VOLUME,
+    &SIG_MUTE_MASTER_VOLUME,
+    &SIG_BGM_MUTE,
+    &SIG_MUTE_BGM_AUTO_VOLUME,
     &SIG_SE_PLAY,
     &SIG_SE_PLAY_EX,
     &SIG_SE_LOAD,
     &SIG_SE_STOP,
     &SIG_SE_SET_VOLUME,
     &SIG_SE_GET_VOLUME,
+    &SIG_SE_MUTE,
     &SIG_WAIT,
     &SIG_WAIT_CLICK,
     &SIG_WAIT_SYNC_BEGIN,
@@ -3210,6 +5449,7 @@ static ALL_SIGNATURES: &[&ExtSig] = &[
     &SIG_WAIT_TIME_POP,
     &SIG_SELECT_INIT,
     &SIG_SELECT_SET,
+    &SIG_SELECT_COMMIT,
     &SIG_SELECT_CLEAR,
     &SIG_BTN_INIT,
     &SIG_BTN_UNINIT,
@@ -3231,7 +5471,38 @@ static ALL_SIGNATURES: &[&ExtSig] = &[
     &SIG_BTN_UNLOCK,
     &SIG_BTN_SET_ANIM,
     &SIG_BTN_SET_HIT,
-    &SIG_FONT_SYSTEM_QUERY_9,
+    &SIG_BTN_GET_ONMOUSE,
+    &SIG_SKIP_SET,
+    &SIG_SKIP_IS,
+    &SIG_AUTO_SET,
+    &SIG_AUTO_IS,
+    &SIG_AUTO_SET_SPEED,
+    &SIG_WINDOW_CHANGE_MODE,
+    &SIG_WINDOW_SET_MODE_CACHE,
+    &SIG_EFFECT_ENABLE,
+    &SIG_EFFECT_ENABLE_IS,
+    &SIG_WINDOW_GET_MODE_CACHE,
+    &SIG_INPUT_MOUSE_TO_MEM,
+    &SIG_MEMORY_BANK_CLEAR,
+    &SIG_SET_LANGUAGE,
+    &SIG_INPUT_KEY_CANCEL,
+    &SIG_SET_FONT_COLOR,
+    &SIG_LOAD_FONT_EX,
+    &SIG_MEMORY_STACK_PUSH,
+    &SIG_MEMORY_STACK_POP,
+    &SIG_LIST_STACK_PUSH_POINT,
+    &SIG_LIST_STACK_POP_COUNT,
+    &SIG_SYSTEM_SCRATCH_CLEAR,
+    &SIG_SYSTEM_SCRATCH_GET,
+    &SIG_SET_FONT_SIZE,
+    &SIG_GET_FONT_SIZE,
+    &SIG_GET_FONT_TYPE,
+    &SIG_SET_FONT_EFFECT,
+    &SIG_GET_FONT_EFFECT,
+    &SIG_CANCEL_SCENE_SKIP,
+    &SIG_LIST_STACK_GET_COUNT,
+    &SIG_SYSTEM_WINDOW_OVERLAY_SET,
+    &SIG_DEBUG_WINDOW_SET,
     &SIG_SYSTEM_BTN_SET,
     &SIG_SYSTEM_BTN_RELEASE,
     &SIG_SYSTEM_BTN_ENABLE,
@@ -3245,28 +5516,67 @@ static ALL_SIGNATURES: &[&ExtSig] = &[
     &SIG_VOICE_STOP,
     &SIG_VOICE_SET_VOLUME,
     &SIG_VOICE_GET_VOLUME,
+    &SIG_VOICE_PLAY_FADE,
     &SIG_VOICE_AUTOPAN_SIZE_OVER,
     &SIG_VOICE_WAIT,
     &SIG_SAVE_THUMBNAIL_MOSAIC_SET,
+    &SIG_SAVE_TIME_DRAW,
+    &SIG_HISTORY_SCROLL,
+    &SIG_HISTORY_UPDATE,
+    &SIG_EFFECT_STOP_SKIP,
     &SIG_WINDOW_EFFECT_1,
     &SIG_WINDOW_EFFECT_2,
     &SIG_ACTION_RUN_COUNT_OVER,
     &SIG_ACTION_SYNC_RUN_COUNT_OVER,
     &SIG_ACTION_CLEAR_COUNT_OVER,
     &SIG_ACTION_TIMELINE_5,
+    &SIG_ACTION_TIMELINE_6,
+    &SIG_ACTION_TIMELINE_7,
     &SIG_ACTION_TIMELINE_8,
     &SIG_ACTION_TIMELINE_9,
+    &SIG_ACTION_TIMELINE_10,
     &SIG_ACTION_TIMELINE_11,
+    &SIG_ACTION_TIMELINE_14,
+    &SIG_ACTION_TIMELINE_15,
+    &SIG_ACTION_TIMELINE_17_REAL,
+    &SIG_ACTION_TIMELINE_20,
+    &SIG_ACTION_PUSH,
+    &SIG_ACTION_POP,
     &SIG_ACTION_SET_ACTIVE,
     &SIG_ACTION_TIMELINE_29,
     &SIG_ACTION_SET_CLEAR,
+    &SIG_APP_EXEC,
+    &SIG_STRING_NOT_EQUAL,
+    &SIG_STR_APPEND,
+    &SIG_STRGETCF,
     &SIG_ARG_GET,
+    &SIG_STR_COPY_LEN,
+    &SIG_FILE_EXIST,
+    &SIG_WSPRINT,
+    &SIG_CHECK_DISC,
+    &SIG_STRING_LENGTH,
+    &SIG_PROCESS_CHECKPOINT_SET,
+    &SIG_UPDATE_ACCESS,
+    &SIG_SYSTEM_TASK_VALUE,
+    &SIG_WORK_PROCESS_VALUE,
+    &SIG_STR_REPLACE,
+    &SIG_STRING_NON_EMPTY,
+    &SIG_ATTACH_WORK_PROCESS,
+    &SIG_DETACH_WORK_PROCESS,
     &SIG_OPENFILE,
     &SIG_READ_FILE,
+    &SIG_CLOSE_FILE_NOT_HANDLE,
     &SIG_SET_FILE_POINTER,
+    &SIG_FILE_STRING,
+    &SIG_SET_LAST_PROCESS,
     &SIG_SZ_BUF,
     &SIG_GETPRIVATEPROFILEINT,
+    &SIG_ACCESS_CLEAR,
     &SIG_RANDOM,
+    &SIG_CREATE_THREAD,
+    &SIG_EXIT_THREAD,
+    &SIG_SUSPEND_THREAD,
+    &SIG_GET_THREAD,
     &SIG_RUN,
     &SIG_RUN_NO_WAIT,
     &SIG_RUN_STACK,
@@ -3563,19 +5873,19 @@ pub fn observed_pop_count(category: u16, index: u16) -> Option<usize> {
         (18, 3) => Some(2),
         (18, 4) => Some(2),
         (18, 5) => Some(3),
-        (18, 6) => Some(2),
+        (18, 6) => Some(1),
         (18, 7) => Some(3),
         (18, 8) => Some(1),
         (18, 9) => Some(10),
         (18, 10) => Some(1),
-        (18, 12) => Some(9),
+        (18, 12) => Some(1),
         (18, 13) => Some(1),
         (18, 14) => Some(1),
         (18, 15) => Some(1),
         (18, 17) => Some(1),
         (18, 18) => Some(3),
         (18, 21) => Some(1),
-        (18, 28) => Some(1),
+        (18, 28) => Some(0),
         (18, 29) => Some(0),
         (18, 30) => Some(1),
         (18, 31) => Some(3),

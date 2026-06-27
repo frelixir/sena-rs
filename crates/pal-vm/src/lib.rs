@@ -29,7 +29,10 @@ pub use animation::{
     AnimationFrameRecord, AnimationHandle, PalAnimationFrameRecord, PalSequenceAnimationDesc,
     PalSheetAnimationDesc, SequenceAnimationDesc, SheetAnimationAxis, SheetAnimationDesc,
 };
-pub use app::{run_sena, run_sena_headless, DiagnosticClick, SenaConfig};
+pub use app::{
+    run_sena, run_sena_headless, DiagnosticAutoAdvance, DiagnosticClick,
+    DiagnosticClickWhenHitEnabled, DiagnosticKeyEvent, DiagnosticPngAt, SenaConfig,
+};
 pub use assets::{CoreAssets, GraphicIndex};
 pub use audio::{AudioConfig, AudioHandle, AudioSystem, PalSoundGroup, PalSoundStatus, PalVolume};
 pub use config::{

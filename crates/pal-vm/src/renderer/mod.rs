@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 use std::num::NonZeroU32;
+use std::path::Path;
 use std::sync::Arc;
 
 use winit::dpi::PhysicalSize;
@@ -108,11 +109,19 @@ impl Renderer {
     }
 
     pub fn render(&mut self, scene: &FrameScene) -> RenderOutcome {
+        self.render_with_png_dump(scene, None)
+    }
+
+    pub fn render_with_png_dump(
+        &mut self,
+        scene: &FrameScene,
+        dump_path: Option<&Path>,
+    ) -> RenderOutcome {
         self.upload_scene_textures(scene);
         if self.size.width == 0 || self.size.height == 0 {
             return RenderOutcome::Skipped;
         }
-        match self.draw_surface_frame(scene) {
+        match self.draw_surface_frame(scene, dump_path) {
             Ok(()) => RenderOutcome::Rendered,
             Err(err) => {
                 log::error!("software renderer failed: {err}");
@@ -122,6 +131,12 @@ impl Renderer {
     }
 
     fn upload_scene_textures(&mut self, scene: &FrameScene) {
+        self.scene_textures.retain(|texture_id, _| {
+            scene
+                .textures
+                .iter()
+                .any(|texture| texture.id == *texture_id)
+        });
         for texture in &scene.textures {
             let needs_upload = self.scene_textures.get(&texture.id).is_none_or(|cached| {
                 cached.generation != texture.generation
@@ -141,7 +156,11 @@ impl Renderer {
         }
     }
 
-    fn draw_surface_frame(&mut self, scene: &FrameScene) -> anyhow::Result<()> {
+    fn draw_surface_frame(
+        &mut self,
+        scene: &FrameScene,
+        dump_path: Option<&Path>,
+    ) -> anyhow::Result<()> {
         let width = self.size.width as usize;
         let height = self.size.height as usize;
         let clear = color_to_rgb(scene_clear_color(scene, self.clear_color));
@@ -235,6 +254,9 @@ impl Renderer {
                 log::info!("wrote software renderer frame dump to {path}");
             }
         }
+        if let Some(path) = dump_path {
+            write_surface_png(path, &buffer, width, height)?;
+        }
         buffer.present().map_err(|err| softbuffer_error(err))?;
         Ok(())
     }
@@ -313,7 +335,7 @@ struct CachedTexture {
     generation: u64,
     width: u32,
     height: u32,
-    pixels: Vec<u8>,
+    pixels: Arc<[u8]>,
 }
 
 impl CachedTexture {
@@ -515,5 +537,31 @@ fn write_ppm(path: &str, pixels: &[u32], width: usize, height: usize) -> anyhow:
             (pixel & 0xFF) as u8,
         ])?;
     }
+    Ok(())
+}
+
+fn write_surface_png(
+    path: &Path,
+    pixels: &[u32],
+    width: usize,
+    height: usize,
+) -> anyhow::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let file = std::fs::File::create(path)?;
+    let writer = std::io::BufWriter::new(file);
+    let mut encoder = png::Encoder::new(writer, width as u32, height as u32);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header()?;
+    let mut rgba = Vec::with_capacity(width.saturating_mul(height).saturating_mul(4));
+    for pixel in pixels {
+        rgba.push(((pixel >> 16) & 0xFF) as u8);
+        rgba.push(((pixel >> 8) & 0xFF) as u8);
+        rgba.push((pixel & 0xFF) as u8);
+        rgba.push(0xFF);
+    }
+    writer.write_image_data(&rgba)?;
     Ok(())
 }

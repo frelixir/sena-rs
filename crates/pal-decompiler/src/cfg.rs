@@ -115,6 +115,13 @@ pub fn build_cfg(instructions: &[Instruction], entry_pc: u32) -> BTreeMap<u32, B
                 current_instrs = Vec::new();
             }
             current_start = Some(pc);
+        } else if current_start.is_none() {
+            // We can land here after closing a block at an unconditional
+            // jump/return.  Some scripts keep unreferenced procedure tails
+            // before the next real point entry; if we leave current_start as
+            // None, those dead instructions get accidentally prepended to the
+            // next leader/function.  Start an isolated dead block instead.
+            current_start = Some(pc);
         }
 
         current_instrs.push(instr.clone());

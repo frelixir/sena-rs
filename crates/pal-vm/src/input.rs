@@ -8,6 +8,7 @@ pub enum PalKey {
     Return,
     Escape,
     Space,
+    Ctrl,
     Up,
     Down,
     Left,
@@ -28,10 +29,11 @@ pub enum PalMouseButton {
 const KEY_RETURN: u32 = 1 << 0;
 const KEY_ESCAPE: u32 = 1 << 1;
 const KEY_SPACE: u32 = 1 << 2;
-const KEY_UP: u32 = 1 << 3;
-const KEY_DOWN: u32 = 1 << 4;
-const KEY_LEFT: u32 = 1 << 5;
-const KEY_RIGHT: u32 = 1 << 6;
+const KEY_CTRL: u32 = 1 << 3;
+const KEY_UP: u32 = 1 << 4;
+const KEY_DOWN: u32 = 1 << 5;
+const KEY_LEFT: u32 = 1 << 6;
+const KEY_RIGHT: u32 = 1 << 7;
 
 const MOUSE_LEFT: u8 = 1 << 0;
 const MOUSE_RIGHT: u8 = 1 << 1;
@@ -42,6 +44,7 @@ fn pal_key_bit(key: PalKey) -> u32 {
         PalKey::Return => KEY_RETURN,
         PalKey::Escape => KEY_ESCAPE,
         PalKey::Space => KEY_SPACE,
+        PalKey::Ctrl => KEY_CTRL,
         PalKey::Up => KEY_UP,
         PalKey::Down => KEY_DOWN,
         PalKey::Left => KEY_LEFT,
@@ -65,6 +68,7 @@ fn key_name_to_bit(key_name: &str) -> u32 {
         "Return" | "Enter" | "NumpadEnter" => KEY_RETURN,
         "Escape" => KEY_ESCAPE,
         "Space" | " " => KEY_SPACE,
+        "Ctrl" | "Control" | "ControlLeft" | "ControlRight" | "LeftCtrl" | "RightCtrl" => KEY_CTRL,
         "ArrowUp" => KEY_UP,
         "ArrowDown" => KEY_DOWN,
         "ArrowLeft" => KEY_LEFT,
@@ -314,6 +318,40 @@ impl PalInputState {
     /// Used by WaitClick tasks.
     pub fn any_push(&self) -> bool {
         self.key_push != 0 || self.mouse_push != 0 || self.wheel_delta > 0.0
+    }
+
+    /// True while the PAL fast-forward modifier is held.
+    ///
+    /// Native ADV skip is driven by PAL's keyboard state, not by a synthetic
+    /// VM-side flag.  The headless Ctrl diagnostics feed the same keyboard
+    /// path as winit, and wait/text code consumes this held state where the
+    /// original engine treats Ctrl as fast-forward.
+    pub fn fast_forward_held(&self) -> bool {
+        self.key_on(PalKey::Ctrl)
+    }
+
+    /// Return a frame-local copy with mouse push edges removed.
+    ///
+    /// Game.exe button reactions consume the mouse click before PAL wait-click
+    /// tasks see it. The held mouse state is preserved so hover/pressed visuals
+    /// continue to render correctly during the same frame.
+    pub fn without_mouse_push(&self) -> Self {
+        let mut copy = self.clone();
+        copy.mouse_push = 0;
+        copy
+    }
+
+    /// Return a frame-local copy with all push edges removed.
+    ///
+    /// Used when an input edge has been consumed by the ADV typewriter reveal:
+    /// the held state remains available for visuals, but the same edge must not
+    /// also complete the following PAL wait-click task.
+    pub fn without_push_edges(&self) -> Self {
+        let mut copy = self.clone();
+        copy.key_push = 0;
+        copy.mouse_push = 0;
+        copy.wheel_delta = 0.0;
+        copy
     }
 
     /// Raw keyboard push bitmask (for direct PAL API access).

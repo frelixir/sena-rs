@@ -89,7 +89,15 @@ impl PalRandomState {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PalSystemState {
     language: i32,
+    /// Game.exe task data +8, written by window_change_mode after posting
+    /// PalWindowChangeMode.
     window_mode: i32,
+    /// Game.exe task data +12, written by window_set_mode_cache and returned
+    /// by window_get_mode_cache.  This is intentionally separate from the
+    /// live PAL window mode; system scripts use it as pending/config state.
+    window_mode_cache: i32,
+    auto_speed_percent: i32,
+    effect_enabled: i32,
     window_change_enabled: i32,
     aspect_mode: i32,
     aspect_position_enabled: i32,
@@ -113,6 +121,9 @@ impl Default for PalSystemState {
         Self {
             language: 1,
             window_mode: 0,
+            window_mode_cache: 0,
+            auto_speed_percent: 0,
+            effect_enabled: 1,
             window_change_enabled: 1,
             aspect_mode: 0,
             aspect_position_enabled: 0,
@@ -151,10 +162,37 @@ impl PalSystemState {
         self.window_mode
     }
 
+    pub fn window_mode_cache(&self) -> i32 {
+        self.window_mode_cache
+    }
+
     pub fn change_window_mode(&mut self, mode: i32) -> i32 {
         self.window_mode = mode;
         self.window_requests
             .push(PalWindowRequest::ChangeMode { mode });
+        1
+    }
+
+    pub fn set_window_mode_cache(&mut self, mode: i32) -> i32 {
+        self.window_mode_cache = mode;
+        1
+    }
+
+    pub fn auto_speed_percent(&self) -> i32 {
+        self.auto_speed_percent
+    }
+
+    pub fn set_auto_speed_percent(&mut self, speed: i32) -> i32 {
+        self.auto_speed_percent = speed.clamp(0, 100);
+        1
+    }
+
+    pub fn effect_enabled(&self) -> i32 {
+        self.effect_enabled
+    }
+
+    pub fn set_effect_enabled(&mut self, enabled: i32) -> i32 {
+        self.effect_enabled = if enabled == 0 { 0 } else { 1 };
         1
     }
 
@@ -316,6 +354,14 @@ impl PalSystemState {
                 self.window_pos.1
                     + (self.window_size.1 as f32 * (y as f32 / logical_h.max(1) as f32)) as i32,
             )
+        }
+    }
+
+    pub fn active_content_rect(&self) -> PalRectI {
+        if self.window_mode != 0 {
+            self.fullscreen_content_rect.normalized_nonempty()
+        } else {
+            self.windowed_content_rect.normalized_nonempty()
         }
     }
 

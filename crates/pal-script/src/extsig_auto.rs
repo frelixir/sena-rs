@@ -387,27 +387,27 @@ static AUTO_PARAMS_0003_000D: &[Param] = &[
         meaning: "runtime pop-order parameter for sp_cls_transition",
     },
 ];
-// Reachable semantic fallback for Game extcall 0003_000E sp_set_pos_ex.
+// Reachable semantic fallback for Game extcall 0003_000E sp_move_ex.
 static AUTO_POP_0003_000E: &[ParamSpec] = &[
     ParamSpec {
         name: "slot",
         kind: ParamKind::SpriteSlot,
-        meaning: "runtime pop-order parameter for sp_set_pos_ex",
+        meaning: "runtime pop-order parameter for sp_move_ex",
     },
     ParamSpec {
         name: "x",
         kind: ParamKind::CoordinateX,
-        meaning: "runtime pop-order parameter for sp_set_pos_ex",
+        meaning: "runtime pop-order parameter for sp_move_ex",
     },
     ParamSpec {
         name: "y",
         kind: ParamKind::CoordinateY,
-        meaning: "runtime pop-order parameter for sp_set_pos_ex",
+        meaning: "runtime pop-order parameter for sp_move_ex",
     },
     ParamSpec {
         name: "z",
         kind: ParamKind::CoordinateZ,
-        meaning: "runtime pop-order parameter for sp_set_pos_ex",
+        meaning: "runtime pop-order parameter for sp_move_ex",
     },
 ];
 static AUTO_PARAMS_0003_000E: &[Param] = &[
@@ -415,25 +415,25 @@ static AUTO_PARAMS_0003_000E: &[Param] = &[
         name: "slot",
         pop_idx: 0,
         kind: ParamKind::SpriteSlot,
-        meaning: "runtime pop-order parameter for sp_set_pos_ex",
+        meaning: "runtime pop-order parameter for sp_move_ex",
     },
     Param {
         name: "x",
         pop_idx: 1,
         kind: ParamKind::CoordinateX,
-        meaning: "runtime pop-order parameter for sp_set_pos_ex",
+        meaning: "runtime pop-order parameter for sp_move_ex",
     },
     Param {
         name: "y",
         pop_idx: 2,
         kind: ParamKind::CoordinateY,
-        meaning: "runtime pop-order parameter for sp_set_pos_ex",
+        meaning: "runtime pop-order parameter for sp_move_ex",
     },
     Param {
         name: "z",
         pop_idx: 3,
         kind: ParamKind::CoordinateZ,
-        meaning: "runtime pop-order parameter for sp_set_pos_ex",
+        meaning: "runtime pop-order parameter for sp_move_ex",
     },
 ];
 // Reachable semantic fallback for Game extcall 0003_000F sp_set_rect_pos.
@@ -2491,15 +2491,15 @@ static AUTO_REACHABLE_SIGNATURES: &[ExtSig] = &[
         evidence: &[Evidence { kind: EvidenceKind::GameSqlite, reference: "reverse/Game.sqlite category 3 extcall handler checked for reachable sp_cls_transition" }, Evidence { kind: EvidenceKind::Disassembly, reference: "out/extcall_report.json and docs/dis.txt reachable extcall 0003:000D" }, Evidence { kind: EvidenceKind::PalSqlite, reference: "reverse/PAL.sqlite exports checked by subsystem for reachable sp_cls_transition; exact export recorded when known" }],
         implementation_status: ImplStatus::Blocked, decompiler_status: ImplStatus::Blocked,
     },
-    // Game.sqlite/PAL.sqlite evidence checked for reachable extcall 0003_000E sp_set_pos_ex; promote to extsig.rs when handler EA/export is fully named.
+    // Game.sqlite/PAL.sqlite evidence checked for reachable extcall 0003_000E sp_move_ex; promote to extsig.rs when handler EA/export is fully named.
     ExtSig {
-        category: 3, index: 14, canonical_name: "sp_set_pos_ex", name: "sp_set_pos_ex",
+        category: 3, index: 14, canonical_name: "sp_move_ex", name: "sp_move_ex",
         game_handler_ea: None, pal_export_name: None, pal_export_ea: None,
         pop_count: 4, pop_order: AUTO_POP_0003_000E, display_order: ORDER_4, params: AUTO_PARAMS_0003_000E,
         return_kind: ReturnKind::Void, returns: false,
         side_effects: &[SideEffect::MutatesSprite],
-        purpose: "Reachable Game.exe extcall 0003:000E (sp_set_pos_ex) for sprite/render-tree state; parameters are named in runtime pop order and must stay synchronized with pal-vm pop_ext_args.",
-        evidence: &[Evidence { kind: EvidenceKind::GameSqlite, reference: "reverse/Game.sqlite category 3 extcall handler checked for reachable sp_set_pos_ex" }, Evidence { kind: EvidenceKind::Disassembly, reference: "out/extcall_report.json and docs/dis.txt reachable extcall 0003:000E" }, Evidence { kind: EvidenceKind::PalSqlite, reference: "reverse/PAL.sqlite exports checked by subsystem for reachable sp_set_pos_ex; exact export recorded when known" }],
+        purpose: "Reachable Game.exe extcall 0003:000E (sp_move_ex) for sprite/render-tree state; parameters are named in runtime pop order and must stay synchronized with pal-vm pop_ext_args.",
+        evidence: &[Evidence { kind: EvidenceKind::GameSqlite, reference: "reverse/Game.sqlite category 3 extcall handler checked for reachable sp_move_ex" }, Evidence { kind: EvidenceKind::Disassembly, reference: "out/extcall_report.json and docs/dis.txt reachable extcall 0003:000E" }, Evidence { kind: EvidenceKind::PalSqlite, reference: "reverse/PAL.sqlite exports checked by subsystem for reachable sp_move_ex; exact export recorded when known" }],
         implementation_status: ImplStatus::Blocked, decompiler_status: ImplStatus::Blocked,
     },
     // Game.sqlite/PAL.sqlite evidence checked for reachable extcall 0003_000F sp_set_rect_pos; promote to extsig.rs when handler EA/export is fully named.

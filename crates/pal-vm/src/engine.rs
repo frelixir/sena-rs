@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -6,7 +7,7 @@ use pal_asset::{Nls, ResourceManager};
 use crate::assets::CoreAssets;
 use crate::audio::{AudioConfig, AudioHandle, AudioSystem, PalSoundGroup};
 use crate::config::{ini_graphics_size, EngineStartupConfig};
-use crate::debug::{collect_frame_dump, pal_debug_enabled, print_dump};
+use crate::debug::{collect_frame_dump, pal_debug_enabled, pal_debug_frame_enabled, print_dump};
 use crate::event::PalEvent;
 use crate::input::PalInputState;
 use crate::runtime::{RuntimeStatus, RuntimeTick, ScriptRuntime, ScriptRuntimeConfig, WaitRequest};
@@ -24,6 +25,9 @@ pub struct TraceConfig {
     pub assets: bool,
     pub render: bool,
     pub buttons: bool,
+    pub input: bool,
+    pub text: bool,
+    pub actions: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -70,7 +74,6 @@ impl Engine {
                 Some(root) => {
                     let startup_config = EngineStartupConfig::load(root, config.nls)?;
                     let mut resource_manager = ResourceManager::bootstrap(root, config.nls)?;
-                    resource_manager.preload_pacs()?;
                     let core_assets = CoreAssets::load(
                         &mut resource_manager,
                         startup_config.system_dat.as_ref(),
@@ -98,6 +101,7 @@ impl Engine {
                     }
                     // Initialise the writable Mem.dat shadow used by MemDatDirect writes.
                     runtime.load_mem_dat(&core_assets.mem_dat.bytes);
+                    runtime.load_portable_system_data(root);
                     let (window_width, window_height) = startup_config.window_size(
                         FrameScene::PAL_DEFAULT_WIDTH,
                         FrameScene::PAL_DEFAULT_HEIGHT,
@@ -281,6 +285,16 @@ impl Engine {
         }
     }
 
+    pub fn input_state(&self) -> &PalInputState {
+        &self.input
+    }
+
+    pub fn diagnostic_button_hit_enabled(&self, x: i32, y: i32) -> Option<(i32, i32)> {
+        self.runtime
+            .as_ref()
+            .and_then(|runtime| runtime.diagnostic_button_hit_enabled(&self.sprites, x, y))
+    }
+
     pub fn update(&mut self) -> anyhow::Result<EngineFrame> {
         let timing = self.frame_clock.tick_capped(MAX_PAL_FRAME_DELTA);
         self.update_with_timing(timing)
@@ -307,14 +321,10 @@ impl Engine {
         self.task_system
             .set_pal_time(timing.elapsed.as_millis().min(u32::MAX as u128) as u32);
 
-        // Process all tasks: animations update sprite source_rect, wait tasks check input.
-        self.task_system.process(&mut self.sprites, &self.input);
-        let delta_ms = timing.delta.as_millis().min(u32::MAX as u128) as u32;
-        self.sprites.advance_motion_entries(delta_ms);
-        self.sprites.advance_transitions(delta_ms);
+        let mut button_consumed_mouse_push = false;
+        let mut text_reveal_consumed_push = false;
         if let Some(runtime) = self.runtime.as_mut() {
             runtime.set_pal_time(self.task_system.pal_time_ms);
-            runtime.advance_msprites(&mut self.sprites, delta_ms);
             if let Some(core_assets) = self.core_assets.as_ref() {
                 let nls = self
                     .resource_manager
@@ -327,12 +337,54 @@ impl Engine {
                     self.resource_manager.as_mut(),
                     &mut self.sprites,
                 );
+                runtime.sync_history_sprite(core_assets, nls, &mut self.sprites);
             }
-            runtime.update_button_input_state(&mut self.sprites, &self.input);
+            button_consumed_mouse_push =
+                runtime.update_button_input_state(&mut self.sprites, &self.input);
             if self.config.trace.buttons {
                 let (mx, my) = self.input.mouse_position();
                 runtime.dump_button_states(&self.sprites, timing.frame_index, mx, my);
             }
+            if button_consumed_mouse_push {
+                if let Some(handle) = runtime.pending_wait_handle() {
+                    let _ = self.task_system.free(handle);
+                    runtime.resolve_pending_wait();
+                }
+            } else if runtime.consume_text_reveal_push(&self.input) {
+                if runtime.pending_wait_is_text_reveal() {
+                    if let Some(handle) = runtime.pending_wait_handle() {
+                        let _ = self.task_system.free(handle);
+                    }
+                    runtime.resolve_pending_wait();
+                }
+                text_reveal_consumed_push = true;
+            }
+        }
+
+        // Process all tasks: animations update sprite source_rect, wait tasks check input.
+        // Native button reactions and text reveal consume mouse pushes before
+        // wait_click sees them. Otherwise clicking LOG/SAVE/SYSTEM also
+        // advances ADV text, and the first click on a still-revealing line
+        // skips the line instead of completing the typewriter pass.
+        let task_input;
+        let input_for_tasks = if text_reveal_consumed_push {
+            task_input = self.input.without_push_edges();
+            &task_input
+        } else if button_consumed_mouse_push {
+            task_input = self.input.without_mouse_push();
+            &task_input
+        } else {
+            &self.input
+        };
+        self.task_system.process(&mut self.sprites, input_for_tasks);
+        let delta_ms = timing.delta.as_millis().min(u32::MAX as u128) as u32;
+        self.sprites.advance_motion_entries(delta_ms);
+        self.sprites.advance_transitions(delta_ms);
+        if let Some(runtime) = self.runtime.as_mut() {
+            runtime.set_pal_time(self.task_system.pal_time_ms);
+            runtime.advance_sprite_action_lanes(&mut self.sprites);
+            runtime.advance_msprites(&mut self.sprites, delta_ms);
+            runtime.release_retired_sprites(&mut self.sprites);
         }
 
         // Check if the script runtime was waiting on a task that just completed.
@@ -375,13 +427,12 @@ impl Engine {
         // Process any wait request emitted by the VM this tick.
         if let Some(tick) = runtime_tick.as_ref() {
             if let Some(wait_req) = &tick.wait_request {
-                // The native PAL loop can observe the same input edge that caused
-                // script execution to reach wait_click().  Creating a task after
-                // task_system.process() without checking the current frame drops
-                // that edge, making ADV text/buttons require an extra click.
-                let input_satisfied_click_wait =
-                    matches!(wait_req, WaitRequest::Click | WaitRequest::ClickOrTime(_))
-                        && self.input.any_push();
+                // Do not let the input edge that reached a new wait_click also
+                // satisfy that freshly-created wait.  Native Game.exe rewinds
+                // the script PC and waits for a later polling pass; consuming
+                // the same edge here makes ADV lines auto-advance before the
+                // typewriter pass is visible.
+                let input_satisfied_click_wait = false;
                 let handle = match wait_req {
                     WaitRequest::Click | WaitRequest::ClickOrTime(_)
                         if input_satisfied_click_wait =>
@@ -389,14 +440,34 @@ impl Engine {
                         None
                     }
                     WaitRequest::Frame(n) => self.task_system.create_wait_frame(*n),
-                    WaitRequest::Time(ms) => self.task_system.create_wait_time(*ms),
+                    WaitRequest::Time(ms) => {
+                        let reveal_ms = self
+                            .runtime
+                            .as_ref()
+                            .map_or(0, |runtime| runtime.text_reveal_remaining_ms());
+                        let duration_ms = ms.saturating_add(reveal_ms);
+                        if reveal_ms > 0 {
+                            log::debug!(
+                                "[trace-wait] wait_time extended for text reveal base_ms={ms} reveal_ms={reveal_ms} duration_ms={duration_ms}"
+                            );
+                        }
+                        self.task_system.create_wait_time(duration_ms)
+                    }
+                    WaitRequest::TextReveal(ms) => self.task_system.create_wait_time(*ms),
                     WaitRequest::Click => self.task_system.create_wait_click(),
-                    WaitRequest::ClickOrTime(ms) => self.task_system.create_wait_click_or_time(*ms),
+                    WaitRequest::ClickOrTime(ms) => {
+                        let reveal_ms = self
+                            .runtime
+                            .as_ref()
+                            .map_or(0, |runtime| runtime.text_reveal_remaining_ms());
+                        self.task_system
+                            .create_wait_click_or_time(ms.saturating_add(reveal_ms))
+                    }
                 };
                 match (handle, input_satisfied_click_wait) {
                     (Some(h), _) => {
                         if let Some(runtime) = self.runtime.as_mut() {
-                            runtime.set_wait_handle(h);
+                            runtime.set_wait_handle(h, *wait_req);
                         }
                     }
                     (None, true) => {
@@ -426,7 +497,7 @@ impl Engine {
 
         let scene = self.compose_scene(timing.elapsed, logical_width, logical_height);
 
-        if self.pal_debug {
+        if self.pal_debug || pal_debug_frame_enabled(timing.frame_index) {
             let frame_events = runtime_tick
                 .as_ref()
                 .map(|t| t.frame_events.as_slice())
@@ -497,6 +568,34 @@ impl Engine {
             }
         }
 
+        if self.config.trace.text {
+            if let Some(runtime) = self.runtime.as_ref() {
+                runtime.dump_text_diagnostic_state(
+                    &self.sprites,
+                    &scene,
+                    &self.last_runtime_status,
+                    &self.input,
+                    timing.frame_index,
+                );
+            }
+        }
+
+        if self.config.trace.input {
+            let (mouse_x, mouse_y) = self.input.mouse_position();
+            log::debug!(
+                "[trace-input] frame={} key_push=0x{:08X} key_on=0x{:08X} key_pull=0x{:08X} mouse_push=0x{:02X} mouse_on=0x{:02X} mouse_pull=0x{:02X} mouse=({}, {})",
+                timing.frame_index,
+                self.input.raw_key_push(),
+                self.input.raw_key_on(),
+                self.input.raw_key_pull(),
+                self.input.raw_mouse_push(),
+                self.input.raw_mouse_on(),
+                self.input.raw_mouse_pull(),
+                mouse_x,
+                mouse_y
+            );
+        }
+
         Ok(EngineFrame {
             timing,
             runtime_tick,
@@ -513,15 +612,27 @@ impl Engine {
     ) -> FrameScene {
         let mut scene = FrameScene::from_runtime_status(&self.last_runtime_status, elapsed)
             .with_logical_size(logical_width, logical_height);
+        let mut sprite_commands = self.sprites.commands();
+        sprite_commands.extend(self.sprites.transition_commands());
+        // Transition sprites participate in the same PAL render tree as normal
+        // sprites. Appending them after all live sprites lets background
+        // transitions overdraw ADV text/buttons despite lower z/priority.
+        sprite_commands.sort_by_key(|command| match command {
+            crate::scene::DrawCommand::Sprite(sprite) => sprite.priority,
+            crate::scene::DrawCommand::SolidQuad(_) => i32::MAX,
+        });
+        let mut used_textures = HashSet::new();
+        for command in &sprite_commands {
+            if let crate::scene::DrawCommand::Sprite(sprite) = command {
+                used_textures.insert(sprite.texture_id);
+            }
+        }
         for texture in self.sprites.textures() {
-            scene.textures.push(texture.clone());
+            if used_textures.contains(&texture.id) {
+                scene.textures.push(texture.clone());
+            }
         }
-        for command in self.sprites.commands() {
-            scene.commands.push(command);
-        }
-        for command in self.sprites.transition_commands() {
-            scene.commands.push(command);
-        }
+        scene.commands.extend(sprite_commands);
         if let Some(runtime) = self.runtime.as_ref() {
             if let Some(quad) = runtime.effect_overlay(logical_width, logical_height) {
                 scene

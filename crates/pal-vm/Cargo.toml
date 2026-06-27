@@ -13,6 +13,22 @@ path = "src/lib.rs"
 name = "sena"
 path = "src/sena.rs"
 
+[[bin]]
+name = "dump-pgd"
+path = "src/dump_pgd.rs"
+
+[[bin]]
+name = "dump-graphic"
+path = "src/dump_graphic.rs"
+
+[[bin]]
+name = "dump-pgd-info"
+path = "src/dump_pgd_info.rs"
+
+[[bin]]
+name = "dump-resource"
+path = "src/dump_resource.rs"
+
 [dependencies]
 ab_glyph.workspace = true
 anyhow.workspace = true

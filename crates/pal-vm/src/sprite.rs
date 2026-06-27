@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::msprite::MSpriteHandle;
 use crate::scene::{
@@ -150,7 +151,16 @@ impl SpriteSystem {
         let Some(surface_id) = self.get(handle).map(|sprite| sprite.surface) else {
             return false;
         };
-        let Ok(surface) = SpriteSurface::rgba8(surface_id, 1, width, height, rgba) else {
+        // GUI rendering caches textures by id/generation. Native PAL frequently
+        // replaces a sprite surface in-place with the same id and dimensions
+        // for ADV typewriter text, face parts, and animation frames, so a
+        // replacement must advance the generation even when the size is stable.
+        let generation = self
+            .surfaces
+            .get(&surface_id)
+            .map(|surface| surface.generation.saturating_add(1).max(1))
+            .unwrap_or(1);
+        let Ok(surface) = SpriteSurface::rgba8(surface_id, generation, width, height, rgba) else {
             return false;
         };
         self.surfaces.insert(surface_id, surface);
@@ -372,7 +382,7 @@ impl SpriteSystem {
                 tween.elapsed_ms = tween.elapsed_ms.saturating_add(delta_ms);
                 let t = (tween.elapsed_ms as f32 / tween.duration_ms.max(1) as f32).clamp(0.0, 1.0);
                 let scale = tween.from + (tween.to - tween.from) * t;
-                let _ = self.set_scale(handle, scale);
+                let _ = self.set_scale_direct(handle, scale);
                 if tween.elapsed_ms < tween.duration_ms {
                     entry.anim_delta_scale = Some(tween);
                 } else {
@@ -386,7 +396,7 @@ impl SpriteSystem {
                 let t = (tween.elapsed_ms as f32 / tween.duration_ms.max(1) as f32).clamp(0.0, 1.0);
                 let alpha = tween.from as f32 + (tween.to as f32 - tween.from as f32) * t;
                 let alpha = alpha.round().clamp(0.0, 255.0) as u8;
-                let _ = self.set_alpha(handle, alpha);
+                let _ = self.set_alpha_direct(handle, alpha);
                 if tween.elapsed_ms < tween.duration_ms {
                     entry.anim_delta_color_a = Some(tween);
                 } else {
@@ -570,12 +580,19 @@ impl SpriteSystem {
     }
 
     pub fn set_pos(&mut self, handle: SpriteHandle, x: i32, y: i32, z: i32) -> bool {
+        if let Some(entry) = self.motion_entries.get_mut(&handle) {
+            entry.anim_delta_pos = None;
+            if !entry.has_active_animation() {
+                self.motion_entries.remove(&handle);
+            }
+        }
         self.set_pos_float(handle, x as f32, y as f32, z as f32)
     }
 
     pub fn set_pos_float(&mut self, handle: SpriteHandle, x: f32, y: f32, z: f32) -> bool {
         let priority = match self.get_mut(handle) {
             Some(sprite) => {
+                trace_sprite_position_invariant("set_pos", handle, sprite, x, y, z);
                 sprite.position = PalVec3::from_f32(x, y, z);
                 sprite.effective_priority()
             }
@@ -585,9 +602,31 @@ impl SpriteSystem {
         true
     }
 
+    pub fn set_native_projection(
+        &mut self,
+        handle: SpriteHandle,
+        projection: Option<(f32, f32)>,
+    ) -> bool {
+        match self.get_mut(handle) {
+            Some(sprite) => {
+                sprite.native_projection = projection;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn position(&self, handle: SpriteHandle) -> Option<PalVec3> {
+        self.get(handle).map(|sprite| sprite.position)
+    }
+
     pub fn move_pos(&mut self, handle: SpriteHandle, dx: f32, dy: f32, dz: f32) -> bool {
         let priority = match self.get_mut(handle) {
             Some(sprite) => {
+                let new_x = sprite.position.x + dx;
+                let new_y = sprite.position.y + dy;
+                let new_z = sprite.position.z + dz;
+                trace_sprite_position_invariant("move_pos", handle, sprite, new_x, new_y, new_z);
                 sprite.position.x += dx;
                 sprite.position.y += dy;
                 sprite.position.z += dz;
@@ -709,6 +748,10 @@ impl SpriteSystem {
                 self.motion_entries.remove(&handle);
             }
         }
+        self.set_scale_direct(handle, scale)
+    }
+
+    fn set_scale_direct(&mut self, handle: SpriteHandle, scale: f32) -> bool {
         match self.get_mut(handle) {
             Some(sprite) => {
                 sprite.scale = scale;
@@ -725,6 +768,10 @@ impl SpriteSystem {
                 self.motion_entries.remove(&handle);
             }
         }
+        self.set_alpha_direct(handle, alpha)
+    }
+
+    fn set_alpha_direct(&mut self, handle: SpriteHandle, alpha: u8) -> bool {
         match self.get_mut(handle) {
             Some(sprite) => {
                 let raw = sprite.color.0 & 0x00FF_FFFF;
@@ -858,8 +905,7 @@ impl SpriteSystem {
         }
         let rgba = color.to_rgba_u8();
         let idx = ((y as u32 * surface.width + x as u32) * 4) as usize;
-        surface.pixels[idx..idx + 4].copy_from_slice(&rgba);
-        surface.mark_dirty();
+        surface.pixels_mut()[idx..idx + 4].copy_from_slice(&rgba);
         true
     }
 
@@ -1113,7 +1159,7 @@ fn mask_alpha_surface(
     dst_y: i32,
     width: u32,
     height: u32,
-    mask: (u32, u32, Vec<u8>),
+    mask: (u32, u32, Arc<[u8]>),
     mask_x: i32,
     mask_y: i32,
 ) -> bool {
@@ -1133,19 +1179,20 @@ fn mask_alpha_surface(
         return false;
     };
 
+    let dst_width = dst.width;
+    let dst_pixels = dst.pixels_mut();
     for row in 0..region.height {
         let dst_row = region.dst_y + row;
         let mask_row = region.src_y + row;
         for col in 0..region.width {
             let dst_col = region.dst_x + col;
             let mask_col = region.src_x + col;
-            let dst_idx = ((dst_row * dst.width + dst_col) * 4 + 3) as usize;
+            let dst_idx = ((dst_row * dst_width + dst_col) * 4 + 3) as usize;
             let mask_idx = ((mask_row * mask_width + mask_col) * 4) as usize;
-            dst.pixels[dst_idx] =
-                (((u16::from(dst.pixels[dst_idx])) * u16::from(mask_pixels[mask_idx])) >> 8) as u8;
+            dst_pixels[dst_idx] =
+                (((u16::from(dst_pixels[dst_idx])) * u16::from(mask_pixels[mask_idx])) >> 8) as u8;
         }
     }
-    dst.mark_dirty();
     true
 }
 
@@ -1167,22 +1214,23 @@ fn blit_surface_to_surface(
         return false;
     };
 
+    let dst_width = dst.width;
+    let dst_pixels = dst.pixels_mut();
     for row in 0..region.height {
         let dst_row = region.dst_y + row;
         let src_row = region.src_y + row;
         for col in 0..region.width {
             let dst_col = region.dst_x + col;
             let src_col = region.src_x + col;
-            let dst_idx = ((dst_row * dst.width + dst_col) * 4) as usize;
+            let dst_idx = ((dst_row * dst_width + dst_col) * 4) as usize;
             let src_idx = ((src_row * src_width + src_col) * 4) as usize;
             blend_pixel(
-                &mut dst.pixels[dst_idx..dst_idx + 4],
+                &mut dst_pixels[dst_idx..dst_idx + 4],
                 &src_pixels[src_idx..src_idx + 4],
                 mode,
             );
         }
     }
-    dst.mark_dirty();
     true
 }
 
@@ -1295,11 +1343,13 @@ pub struct SpriteDesc {
     pub color: PalColor,
     pub base_priority: i32,
     pub scale: f32,
+    pub center_scale: bool,
     pub rotation: PalVec3,
     pub render_mode: PalRenderMode,
     pub option_type: u32,
     pub info_extra: u32,
     pub source_name: String,
+    pub native_projection: Option<(f32, f32)>,
 }
 
 impl SpriteDesc {
@@ -1319,11 +1369,13 @@ impl SpriteDesc {
             color: PalColor::WHITE,
             base_priority: 0,
             scale: 1.0,
+            center_scale: true,
             rotation: PalVec3::default(),
             render_mode: PalRenderMode::DEFAULT,
             option_type: 0,
             info_extra: 0,
             source_name: String::new(),
+            native_projection: None,
         }
     }
 }
@@ -1348,11 +1400,13 @@ pub struct PalSprite {
     pub center_offset: PalPoint2,
     pub base_priority: i32,
     pub scale: f32,
+    pub center_scale: bool,
     pub rotation: PalVec3,
     pub render_mode: PalRenderMode,
     pub option_type: u32,
     pub info_extra: u32,
     pub source_name: String,
+    pub native_projection: Option<(f32, f32)>,
 }
 
 impl PalSprite {
@@ -1381,11 +1435,13 @@ impl PalSprite {
             center_offset: desc.center_offset,
             base_priority: desc.base_priority,
             scale: desc.scale,
+            center_scale: desc.center_scale,
             rotation: desc.rotation,
             render_mode: desc.render_mode,
             option_type: desc.option_type,
             info_extra: desc.info_extra,
             source_name: desc.source_name,
+            native_projection: desc.native_projection,
         }
     }
 
@@ -1400,10 +1456,12 @@ impl PalSprite {
             center_offset: self.center_offset,
             priority: self.base_priority,
             scale: self.scale,
+            center_scale: self.center_scale,
             rotation: self.rotation,
             render_mode: self.render_mode,
             extra: self.info_extra,
             source_name: self.source_name.clone(),
+            native_projection: self.native_projection,
         }
     }
 
@@ -1417,10 +1475,12 @@ impl PalSprite {
         self.center_offset = info.center_offset;
         self.base_priority = info.priority;
         self.scale = info.scale;
+        self.center_scale = info.center_scale;
         self.rotation = info.rotation;
         self.render_mode = info.render_mode;
         self.info_extra = info.extra;
         self.source_name = info.source_name;
+        self.native_projection = info.native_projection;
     }
 
     pub fn frame_count(&self, axis: PalAnimationAxis) -> u16 {
@@ -1497,18 +1557,79 @@ impl PalSprite {
         let width = self.source_rect.width() as f32;
         let height = self.source_rect.height() as f32;
         let scale = self.scale.max(0.0);
-        let scaled_width = width * scale;
-        let scaled_height = height * scale;
-        let center_x = self.center_offset.x as f32;
-        let center_y = self.center_offset.y as f32;
-        let dst = RectF::new(
-            dst_pos.x as f32 - center_x * (scale - 1.0),
-            dst_pos.y as f32 - center_y * (scale - 1.0),
-            scaled_width,
-            scaled_height,
-        );
+        let rotation_z = self.rotation.z.rem_euclid(512.0);
+        let draw_scale = pal_scratch_clamped_scale(width, height, scale);
+        let mut dst = if self.kind == SpriteKind::SolidLayer {
+            RectF::new(0.0, 0.0, surface.width as f32, surface.height as f32)
+        } else if rotation_z != 0.0 {
+            // PAL.dll `sub_1028D740` routes rotated sprites through a temporary
+            // square work buffer. The work-buffer side is based on the source
+            // diagonal times sprite.scale and is clamped to 4096 before the PAL
+            // blit. `sub_1028EB30` samples the source into that square around
+            // the source center; when rendering the visible source rectangle
+            // directly, the equivalent content top-left is still the ordinary
+            // centered rectangular scale offset.
+            RectF::new(
+                dst_pos.x as f32 - ((width * draw_scale) - width) * 0.5,
+                dst_pos.y as f32 - ((height * draw_scale) - height) * 0.5,
+                width * draw_scale,
+                height * draw_scale,
+            )
+        } else if self.center_scale && (scale - 1.0).abs() > f32::EPSILON {
+            // PAL.dll `sub_1028D740` does not scale from the top-left corner.
+            // For scale-only sprites it creates a centered square scratch, but
+            // the source pixels are centered within that scratch by
+            // `sub_1028EB30`; drawing the visible source rect directly must use
+            // the visible scaled width/height offset.
+            RectF::new(
+                dst_pos.x as f32 - ((width * draw_scale) - width) * 0.5,
+                dst_pos.y as f32 - ((height * draw_scale) - height) * 0.5,
+                width * draw_scale,
+                height * draw_scale,
+            )
+        } else {
+            RectF::new(
+                dst_pos.x as f32,
+                dst_pos.y as f32,
+                width * draw_scale,
+                height * draw_scale,
+            )
+        };
+        if let Some((project_x, project_y)) = self.native_projection {
+            dst = RectF::new(
+                dst.x * project_x,
+                dst.y * project_y,
+                dst.w * project_x,
+                dst.h * project_y,
+            );
+        }
         if !dst.is_drawable() {
             return None;
+        }
+        trace_sprite_draw_invariant(self, dst, surface.width(), surface.height());
+        if self.source_name.starts_with("ST")
+            || self.source_name.starts_with("BK")
+            || self.source_name.starts_with("EV")
+            || self.source_name.starts_with("FA")
+        {
+            log::debug!(
+                "[trace-sprite-draw] handle={} name={} pos=({},{},{}) src={}x{} scale={:.3} native_projection={:?} dst=({:.1},{:.1},{:.1},{:.1}) alpha={} priority={}",
+                self.handle.0,
+                self.source_name,
+                dst_pos.x,
+                dst_pos.y,
+                self.position.z,
+                width,
+                height,
+                scale,
+                self.native_projection,
+                dst.x,
+                dst.y,
+                dst.w,
+                dst.h,
+                self.color.alpha(),
+                self.effective_priority()
+            );
         }
         let tex_w = surface.width().max(1) as f32;
         let tex_h = surface.height().max(1) as f32;
@@ -1542,6 +1663,99 @@ impl PalSprite {
     }
 }
 
+fn pal_scratch_clamped_scale(width: f32, height: f32, scale: f32) -> f32 {
+    if scale <= 0.0 || !scale.is_finite() {
+        return 0.0;
+    }
+    let diagonal = (width.mul_add(width, height * height)).sqrt();
+    if diagonal <= f32::EPSILON || !diagonal.is_finite() {
+        return scale;
+    }
+    let scaled_side = diagonal * scale;
+    if scaled_side <= 4096.0 {
+        scale
+    } else {
+        4096.0 / diagonal
+    }
+}
+
+fn trace_sprite_position_invariant(
+    op: &str,
+    handle: SpriteHandle,
+    sprite: &PalSprite,
+    x: f32,
+    y: f32,
+    z: f32,
+) {
+    if x.abs() <= 4096.0 && y.abs() <= 4096.0 && sprite.scale > 0.0 && sprite.scale <= 8.0 {
+        return;
+    }
+    log::warn!(
+        "[trace-sprite-invariant] op={op} handle={} source={:?} old_pos=({:.0},{:.0},{:.0}) new_pos=({x:.0},{y:.0},{z:.0}) scale={:.3} src_rect=({},{},{},{}) tex={}x{} cell={}x{}",
+        handle.0,
+        sprite.source_name,
+        sprite.position.x,
+        sprite.position.y,
+        sprite.position.z,
+        sprite.scale,
+        sprite.source_rect.left,
+        sprite.source_rect.top,
+        sprite.source_rect.right,
+        sprite.source_rect.bottom,
+        sprite.texture_size.width,
+        sprite.texture_size.height,
+        sprite.cell_size.width,
+        sprite.cell_size.height,
+    );
+}
+
+fn trace_sprite_draw_invariant(
+    sprite: &PalSprite,
+    dst: RectF,
+    surface_width: u32,
+    surface_height: u32,
+) {
+    let rect_outside = sprite.source_rect.left < 0
+        || sprite.source_rect.top < 0
+        || sprite.source_rect.right > surface_width as i32
+        || sprite.source_rect.bottom > surface_height as i32;
+    let bad_source =
+        sprite.source_rect.width() <= 0 || sprite.source_rect.height() <= 0 || rect_outside;
+    let bad_dst = dst.x.abs() > 4096.0 || dst.y.abs() > 4096.0 || dst.w <= 0.0 || dst.h <= 0.0;
+    let bad_scale =
+        sprite.kind != SpriteKind::SolidLayer && (sprite.scale <= 0.0 || sprite.scale > 8.0);
+    if !(bad_source || bad_dst || bad_scale) {
+        return;
+    }
+    log::warn!(
+        "[trace-sprite-invariant] op=draw source={:?} dst=({:.0},{:.0},{:.0}x{:.0}) pos=({:.0},{:.0},{:.0}) offset=({},{}) scale={:.3} src_rect=({},{},{},{}) surface={}x{} tex={}x{} cell={}x{} bad_source={} bad_dst={} bad_scale={}",
+        sprite.source_name,
+        dst.x,
+        dst.y,
+        dst.w,
+        dst.h,
+        sprite.position.x,
+        sprite.position.y,
+        sprite.position.z,
+        sprite.offset.x,
+        sprite.offset.y,
+        sprite.scale,
+        sprite.source_rect.left,
+        sprite.source_rect.top,
+        sprite.source_rect.right,
+        sprite.source_rect.bottom,
+        surface_width,
+        surface_height,
+        sprite.texture_size.width,
+        sprite.texture_size.height,
+        sprite.cell_size.width,
+        sprite.cell_size.height,
+        bad_source,
+        bad_dst,
+        bad_scale,
+    );
+}
+
 #[derive(Clone, Debug)]
 pub struct PalSpriteInfo {
     pub visible: bool,
@@ -1553,10 +1767,12 @@ pub struct PalSpriteInfo {
     pub center_offset: PalPoint2,
     pub priority: i32,
     pub scale: f32,
+    pub center_scale: bool,
     pub rotation: PalVec3,
     pub render_mode: PalRenderMode,
     pub extra: u32,
     pub source_name: String,
+    pub native_projection: Option<(f32, f32)>,
 }
 
 #[derive(Clone, Debug)]
@@ -1567,7 +1783,7 @@ pub struct SpriteSurface {
     pub width: u32,
     pub height: u32,
     pub format: SceneTextureFormat,
-    pub pixels: Vec<u8>,
+    pub pixels: Arc<[u8]>,
     pub dirty: bool,
 }
 
@@ -1592,9 +1808,27 @@ impl SpriteSurface {
         height: u32,
         pixels: Vec<u8>,
     ) -> anyhow::Result<Self> {
-        let texture_id = SceneTextureId(id.0);
-        let texture = SceneTexture::checked_rgba8(texture_id, generation, width, height, pixels)?;
-        Ok(Self::from_scene_texture(texture))
+        let expected = width as usize * height as usize * 4;
+        if pixels.len() != expected {
+            anyhow::bail!(
+                "RGBA sprite surface {:?} has {} bytes, expected {} for {}x{}",
+                id,
+                pixels.len(),
+                expected,
+                width,
+                height
+            );
+        }
+        Ok(Self {
+            id,
+            texture_id: SceneTextureId(id.0),
+            generation,
+            width,
+            height,
+            format: SceneTextureFormat::Rgba8,
+            pixels: Arc::from(pixels),
+            dirty: false,
+        })
     }
 
     pub fn width(&self) -> u32 {
@@ -1612,7 +1846,7 @@ impl SpriteSurface {
 
     pub fn pixels_mut(&mut self) -> &mut [u8] {
         self.mark_dirty();
-        &mut self.pixels
+        Arc::make_mut(&mut self.pixels)
     }
 
     pub fn to_scene_texture(&self) -> SceneTexture {
@@ -1647,6 +1881,7 @@ impl RenderNode {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SpriteKind {
     Static,
+    SolidLayer,
     MSprite { decoder: MSpriteHandle },
 }
 
