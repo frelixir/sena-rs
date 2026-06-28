@@ -9,6 +9,12 @@ Specifically, targeted for the game "Koikake".
 
 ## Example screenshots
 
+* sena-rs on macOS
+![On Mac](./assets/screenshot-mac.png)
+
+* sena-rs on iOS
+![On iOS](./assets/screenshot-ios.png)
+
 | Platform | Targets |
 |---|---|
 | Linux | x86_64, aarch64 |

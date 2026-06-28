@@ -30,13 +30,19 @@ jobs:
       - name: Read version from crates/pal-vm/Cargo.toml
         id: ver
         run: |
-          python3 - <<'PY' >> "$GITHUB_OUTPUT"
-          import tomllib
-          from pathlib import Path
-
-          data = tomllib.loads(Path("crates/pal-vm/Cargo.toml").read_text(encoding="utf-8"))
-          print(f"version={data['package']['version']}")
-          PY
+          VERSION="$(
+            awk '
+              /^\[package\]$/ { in_package = 1; next }
+              /^\[/ && in_package { exit }
+              in_package && /^version[[:space:]]*=/ {
+                gsub(/"/, "", $3)
+                print $3
+                exit
+              }
+            ' crates/pal-vm/Cargo.toml
+          )"
+          test -n "${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
   linux_x86_64:
     name: linux-x86_64 (ubuntu-22.04)
@@ -154,19 +160,17 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="$(
-            python3 - <<'PY'
-            import tomllib
-            from pathlib import Path
-
-            lock = tomllib.loads(Path("Cargo.lock").read_text(encoding="utf-8"))
-            for package in lock["package"]:
-                if package["name"] == "wasm-bindgen":
-                    print(package["version"])
-                    break
-            else:
-                raise SystemExit("wasm-bindgen not found in Cargo.lock")
-            PY
+            awk '
+              /^\[\[package\]\]$/ { in_package = 0; next }
+              /^name[[:space:]]*=[[:space:]]*"wasm-bindgen"$/ { in_package = 1; next }
+              in_package && /^version[[:space:]]*=/ {
+                gsub(/"/, "", $3)
+                print $3
+                exit
+              }
+            ' Cargo.lock
           )"
+          test -n "${VERSION}"
           cargo install -f wasm-bindgen-cli --version "${VERSION}"
 
       - name: Build wasm package

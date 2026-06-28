@@ -17,7 +17,7 @@ pal-script = { path = "crates/pal-script" }
 pal-asset = { path = "crates/pal-asset" }
 pal-vm = { path = "crates/pal-vm" }
 wgpu = "29"
-winit = "0.30"
+winit = { version = "0.30", features = ["android-native-activity"] }
 pollster = "0.4"
 bytemuck = { version = "1.23", features = ["derive"] }
 log = "0.4"
