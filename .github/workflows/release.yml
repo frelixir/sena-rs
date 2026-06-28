@@ -1,0 +1,555 @@
+name: Build Artifacts
+
+on:
+  push:
+    branches:
+      - "**"
+    tags:
+      - "v*"
+  pull_request:
+    branches: ["main"]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-A static_mut_refs"
+  SENA_CARGO_PKG: pal-vm
+  SENA_BIN: sena
+  SENA_RUST_LIB_NAME: pal_vm
+
+jobs:
+  meta:
+    name: Read Sena version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Read version from crates/pal-vm/Cargo.toml
+        id: ver
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import tomllib
+          from pathlib import Path
+
+          data = tomllib.loads(Path("crates/pal-vm/Cargo.toml").read_text(encoding="utf-8"))
+          print(f"version={data['package']['version']}")
+          PY
+
+  linux_x86_64:
+    name: linux-x86_64 (ubuntu-22.04)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libasound2-dev \
+            libudev-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcb1-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libvulkan-dev
+
+      - name: Build (release)
+        run: |
+          cargo build --release -p "${SENA_CARGO_PKG}" --bin "${SENA_BIN}" --verbose
+
+      - name: Package artifact
+        run: |
+          mkdir -p dist/linux
+          test -f "target/release/${SENA_BIN}"
+          tar -C "target/release" -czf "dist/linux/sena-linux-x86_64.tar.gz" "${SENA_BIN}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sena-linux-x86_64
+          path: dist/linux/sena-linux-x86_64.tar.gz
+          if-no-files-found: error
+
+  linux_aarch64:
+    name: linux-aarch64 (ubuntu-22.04-arm)
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libasound2-dev \
+            libudev-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libxinerama-dev \
+            libxcb1-dev \
+            libwayland-dev \
+            libxkbcommon-dev \
+            libvulkan-dev
+
+      - name: Build (release)
+        run: |
+          cargo build --release -p "${SENA_CARGO_PKG}" --bin "${SENA_BIN}" --verbose
+
+      - name: Package artifact
+        run: |
+          mkdir -p dist/linux
+          test -f "target/release/${SENA_BIN}"
+          tar -C "target/release" -czf "dist/linux/sena-linux-aarch64.tar.gz" "${SENA_BIN}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sena-linux-aarch64
+          path: dist/linux/sena-linux-aarch64.tar.gz
+          if-no-files-found: error
+
+  wasm:
+    name: wasm
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wasm-bindgen CLI matching Cargo.lock
+        run: |
+          set -euo pipefail
+          VERSION="$(
+            python3 - <<'PY'
+            import tomllib
+            from pathlib import Path
+
+            lock = tomllib.loads(Path("Cargo.lock").read_text(encoding="utf-8"))
+            for package in lock["package"]:
+                if package["name"] == "wasm-bindgen":
+                    print(package["version"])
+                    break
+            else:
+                raise SystemExit("wasm-bindgen not found in Cargo.lock")
+            PY
+          )"
+          cargo install -f wasm-bindgen-cli --version "${VERSION}"
+
+      - name: Build wasm package
+        run: |
+          set -euo pipefail
+          chmod +x platform/scripts/build_wasm.sh
+          ./platform/scripts/build_wasm.sh
+
+      - name: Verify wasm output
+        run: |
+          test -f dist/wasm/sena-wasm.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sena-wasm
+          path: dist/wasm/sena-wasm.zip
+          if-no-files-found: error
+
+  macos:
+    name: macos (dmg only)
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install build tools
+        run: |
+          brew install xcodegen
+
+      - name: Build macOS .app
+        run: |
+          chmod +x platform/scripts/package_macos_app.sh
+          ./platform/scripts/package_macos_app.sh
+
+      - name: Build macOS .dmg
+        run: |
+          chmod +x platform/scripts/package_macos_dmg.sh
+          ./platform/scripts/package_macos_dmg.sh
+
+      - name: Verify DMG output
+        run: |
+          test -f dist/macos/Sena.dmg
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sena-macos
+          path: dist/macos/Sena.dmg
+          if-no-files-found: error
+
+  ios:
+    name: ios (ipa only)
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add iOS Rust targets
+        run: |
+          rustup target add aarch64-apple-ios
+          rustup target add aarch64-apple-ios-sim
+          rustup target add x86_64-apple-ios
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install build tools
+        run: |
+          brew install xcodegen
+
+      - name: Build iOS artifacts
+        run: |
+          set -euo pipefail
+          export COPYFILE_DISABLE=1
+          chmod +x platform/scripts/build_ios_xcframework.sh
+          chmod +x platform/scripts/package_ios_altstore_ipa.sh
+          ./platform/scripts/build_ios_xcframework.sh
+          ./platform/scripts/package_ios_altstore_ipa.sh
+
+      - name: Collect IPA only
+        run: |
+          set -euo pipefail
+          mkdir -p dist/ios_ci
+
+          IPA_PATH="$(
+            {
+              find dist -maxdepth 5 -type f -name 'SenaLauncher.ipa'
+              find dist -maxdepth 5 -type f -name 'Sena.ipa'
+              find platform/ios -type f -name '*.ipa'
+            } | awk '!seen[$0]++' | head -n 1
+          )"
+
+          test -n "$IPA_PATH"
+          cp -v "$IPA_PATH" dist/ios_ci/SenaLauncher.ipa
+          test -f dist/ios_ci/SenaLauncher.ipa
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sena-ios
+          path: dist/ios_ci/SenaLauncher.ipa
+          if-no-files-found: error
+
+  windows:
+    name: windows (x64 + arm64)
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Add targets
+        shell: cmd
+        run: |
+          rustup target add x86_64-pc-windows-msvc
+          rustup target add aarch64-pc-windows-msvc
+
+      - name: Build x64
+        shell: cmd
+        run: |
+          call platform\scripts\build_windows_msvc.cmd x86_64
+
+      - name: Build arm64
+        shell: cmd
+        run: |
+          call platform\scripts\build_windows_msvc.cmd arm64
+
+      - name: Collect Windows outputs
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/windows_ci | Out-Null
+          Copy-Item "dist\windows\x86_64\sena.exe" "dist\windows_ci\sena.exe"
+          Copy-Item "dist\windows\arm64\sena.exe" "dist\windows_ci\sena_arm64.exe"
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sena-windows
+          path: |
+            dist/windows_ci/sena.exe
+            dist/windows_ci/sena_arm64.exe
+          if-no-files-found: error
+
+  android:
+    name: android
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Setup Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Android Rust targets
+        run: |
+          rustup target add aarch64-linux-android
+          rustup target add x86_64-linux-android
+          rustup target add armv7-linux-androideabi
+          rustup target add i686-linux-android
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android components
+        run: |
+          set -euo pipefail
+          sdkmanager --version
+
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=${ANDROID_SDK_ROOT}" >> "$GITHUB_ENV"
+
+          sdkmanager --licenses < /dev/null || true
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-28" \
+            "build-tools;34.0.0" \
+            "ndk;26.3.11579264"
+
+          echo "Installed NDKs:"
+          ls -la "${ANDROID_SDK_ROOT}/ndk" || true
+
+      - name: Build Android APK
+        env:
+          VARIANT: release
+          ABIS: "arm64-v8a x86_64"
+          ANDROID_PLATFORM: "28"
+        run: |
+          set -euo pipefail
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+          export ANDROID_HOME="${ANDROID_SDK_ROOT}"
+          export ANDROID_NDK_HOME="${ANDROID_SDK_ROOT}/ndk/26.3.11579264"
+
+          chmod +x platform/scripts/package_android_apk.sh
+          ./platform/scripts/package_android_apk.sh
+
+      - name: Collect APK only
+        run: |
+          set -euo pipefail
+          mkdir -p dist/android_ci
+
+          APK_PATH="$(
+            {
+              find platform/android -type f -name 'app-release.apk'
+              find platform/android -type f -path '*/build/outputs/apk/release/*.apk'
+              find platform/android -type f -name '*.apk'
+            } | awk '!seen[$0]++' | head -n 1
+          )"
+
+          test -n "$APK_PATH"
+          cp -v "$APK_PATH" dist/android_ci/app-release.apk
+          test -f dist/android_ci/app-release.apk
+
+      - name: Sign Android APK
+        shell: bash
+        env:
+          ANDROID_KEY_BASE64: ${{ secrets.ANDROID_KEY_BASE64 }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${ANDROID_KEY_BASE64:-}" ]]; then
+            echo "No Android signing secret configured; uploading unsigned release APK."
+            exit 0
+          fi
+
+          test -n "${ANDROID_KEY_ALIAS}"
+          test -n "${ANDROID_KEY_PASSWORD}"
+          test -n "${ANDROID_KEYSTORE_PASSWORD}"
+
+          KEYSTORE="$RUNNER_TEMP/upload-keystore.jks"
+          UNSIGNED_APK="dist/android_ci/app-release.apk"
+          ALIGNED_APK="$RUNNER_TEMP/app-release-aligned.apk"
+          SIGNED_APK="$RUNNER_TEMP/app-release-signed.apk"
+
+          printf '%s' "${ANDROID_KEY_BASE64}" | base64 -d > "${KEYSTORE}"
+
+          "${ANDROID_HOME}/build-tools/34.0.0/zipalign" -f -p 4 \
+            "${UNSIGNED_APK}" \
+            "${ALIGNED_APK}"
+
+          "${ANDROID_HOME}/build-tools/34.0.0/apksigner" sign \
+            --ks "${KEYSTORE}" \
+            --ks-key-alias "${ANDROID_KEY_ALIAS}" \
+            --ks-pass "pass:${ANDROID_KEYSTORE_PASSWORD}" \
+            --key-pass "pass:${ANDROID_KEY_PASSWORD}" \
+            --out "${SIGNED_APK}" \
+            "${ALIGNED_APK}"
+
+          "${ANDROID_HOME}/build-tools/34.0.0/apksigner" verify \
+            --verbose \
+            --print-certs \
+            "${SIGNED_APK}"
+
+          mv -f "${SIGNED_APK}" "${UNSIGNED_APK}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sena-android
+          path: dist/android_ci/app-release.apk
+          if-no-files-found: error
+
+  prerelease:
+    name: Publish GitHub Pre-release (non-tag pushes only)
+    if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')
+    needs: [meta, linux_x86_64, linux_aarch64, wasm, macos, ios, windows, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: sena-prerelease
+      cancel-in-progress: true
+
+    steps:
+      - name: Download all workflow artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: _artifacts
+
+      - name: Compute short SHA
+        id: vars
+        run: |
+          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Recreate pre-release from scratch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          if gh release view pre-release >/dev/null 2>&1; then
+            gh release delete pre-release --cleanup-tag -y
+          fi
+
+          NOTES="$(cat <<EOF
+          Rolling pre-release from non-tag push
+
+          Version: v${{ needs.meta.outputs.version }}
+          Commit: ${{ github.sha }}
+          Short SHA: ${{ steps.vars.outputs.short_sha }}
+          EOF
+          )"
+
+          gh release create pre-release \
+            --prerelease \
+            --target "${{ github.sha }}" \
+            --title "sena v${{ needs.meta.outputs.version }} pre-release (${{ steps.vars.outputs.short_sha }})" \
+            --notes "$NOTES"
+
+          gh release upload pre-release \
+            _artifacts/sena-linux-x86_64/sena-linux-x86_64.tar.gz \
+            _artifacts/sena-linux-aarch64/sena-linux-aarch64.tar.gz \
+            _artifacts/sena-wasm/sena-wasm.zip \
+            _artifacts/sena-macos/Sena.dmg \
+            _artifacts/sena-ios/SenaLauncher.ipa \
+            _artifacts/sena-windows/sena.exe \
+            _artifacts/sena-windows/sena_arm64.exe \
+            _artifacts/sena-android/app-release.apk
+
+  release:
+    name: Publish GitHub Release (tags only)
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [meta, linux_x86_64, linux_aarch64, wasm, macos, ios, windows, android]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: _artifacts
+
+      - name: List artifacts
+        run: |
+          find _artifacts -maxdepth 6 -type f -print
+
+      - name: Create Release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "sena v${{ needs.meta.outputs.version }}"
+          files: |
+            _artifacts/**/*
+          fail_on_unmatched_files: true
