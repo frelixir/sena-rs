@@ -1,0 +1,103 @@
+name: SenaLauncher
+
+options:
+  deploymentTarget:
+    iOS: "14.0"
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "14.0"
+    PRODUCT_BUNDLE_IDENTIFIER: io.github.xmoezzz.sena
+    PRODUCT_NAME: Sena
+    CODE_SIGN_STYLE: Automatic
+    # Keep the explicit Info.plist; do not let Xcode auto-generate/override it.
+    GENERATE_INFOPLIST_FILE: NO
+    SDKROOT: iphoneos
+    SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+
+# No ZIP import: games are copied into Files/Documents and scanned.
+
+targets:
+  SenaLauncher:
+    type: application
+    platform: iOS
+
+    settings:
+      base:
+        SDKROOT: iphoneos
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        "EXCLUDED_ARCHS[sdk=iphonesimulator*]": "x86_64"
+
+    sources:
+      - path: SenaLauncher
+      - path: Headers
+
+    resources:
+      - path: SenaLauncher/Assets.xcassets
+      - path: SenaLauncher/LaunchScreen.storyboard
+
+    info:
+      path: SenaLauncher/Info.plist
+      properties:
+        # Expose Documents to the Files app.
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+
+    preBuildScripts:
+      - name: Ensure Sena.xcframework headers (sim + device)
+        script: |
+          set -euo pipefail
+          XC="${SRCROOT}/Vendor/Sena.xcframework"
+          if [ ! -d "$XC" ]; then
+            echo "error: missing $XC (build/install Sena.xcframework first)" >&2
+            exit 1
+          fi
+
+          # We only fix headers. If the slice directory or binary is missing, fail loudly.
+          for SLICE in ios-arm64 ios-arm64-simulator; do
+            if [ ! -d "$XC/$SLICE" ]; then
+              echo "error: missing slice directory: $XC/$SLICE" >&2
+              echo "error: Sena.xcframework is incomplete. Rebuild it (must include simulator slice for sim builds)." >&2
+              exit 1
+            fi
+            if [ ! -f "$XC/$SLICE/libsena.a" ]; then
+              echo "error: missing $XC/$SLICE/libsena.a" >&2
+              echo "error: Sena.xcframework is incomplete. Rebuild it." >&2
+              exit 1
+            fi
+
+            if [ ! -d "$XC/$SLICE/Headers" ]; then
+              mkdir -p "$XC/$SLICE/Headers"
+
+              # Prefer copying from the device slice if it already has headers.
+              if [ -d "$XC/ios-arm64/Headers" ]; then
+                cp -f "$XC/ios-arm64/Headers/"* "$XC/$SLICE/Headers/" 2>/dev/null || true
+              fi
+
+              # Also drop in the project-level header as a fallback.
+              if [ -f "${SRCROOT}/Headers/sena.h" ]; then
+                cp -f "${SRCROOT}/Headers/sena.h" "$XC/$SLICE/Headers/sena.h"
+              fi
+            fi
+          done
+
+    dependencies:
+      - sdk: UIKit.framework
+      - sdk: Foundation.framework
+      - sdk: VideoToolbox.framework
+      - sdk: CoreMedia.framework
+      - sdk: CoreVideo.framework
+      - sdk: AVFoundation.framework
+      - sdk: Metal.framework
+      - sdk: MetalKit.framework
+      - sdk: QuartzCore.framework
+      - sdk: CoreGraphics.framework
+      - sdk: AudioToolbox.framework
+      - framework: Vendor/Sena.xcframework
+        embed: false
+        codeSign: false
+        link: true

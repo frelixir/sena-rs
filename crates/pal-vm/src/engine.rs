@@ -1,6 +1,5 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
 use pal_asset::{Nls, ResourceManager};
 
@@ -10,6 +9,7 @@ use crate::config::{ini_graphics_size, EngineStartupConfig};
 use crate::debug::{collect_frame_dump, pal_debug_enabled, pal_debug_frame_enabled, print_dump};
 use crate::event::PalEvent;
 use crate::input::PalInputState;
+use crate::platform_time::{Duration, Instant};
 use crate::runtime::{RuntimeStatus, RuntimeTick, ScriptRuntime, ScriptRuntimeConfig, WaitRequest};
 use crate::scene::FrameScene;
 use crate::sprite::SpriteSystem;

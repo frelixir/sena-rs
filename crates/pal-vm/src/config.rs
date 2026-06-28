@@ -1,8 +1,7 @@
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
-use pal_asset::Nls;
+use pal_asset::{vfs, Nls};
 use pal_script::read_u32_le;
 
 #[derive(Clone, Debug, Default)]
@@ -65,10 +64,10 @@ impl ConfigDat {
 
     pub fn load_optional(root: &Path) -> anyhow::Result<Option<Self>> {
         let path = root.join(Self::FILE_NAME);
-        if !path.is_file() {
+        if !vfs::is_file(&path) {
             return Ok(None);
         }
-        let bytes = fs::read(&path)
+        let bytes = vfs::read_all(&path)
             .map_err(|source| anyhow::anyhow!("failed to read {}: {}", path.display(), source))?;
         if bytes.len() != Self::SIZE {
             return Err(anyhow::anyhow!(
@@ -124,10 +123,10 @@ impl SystemDat {
 
     pub fn load_optional(root: &Path) -> anyhow::Result<Option<Self>> {
         let path = root.join(Self::FILE_NAME);
-        if !path.is_file() {
+        if !vfs::is_file(&path) {
             return Ok(None);
         }
-        let bytes = fs::read(&path)
+        let bytes = vfs::read_all(&path)
             .map_err(|source| anyhow::anyhow!("failed to read {}: {}", path.display(), source))?;
         Ok(Some(Self::parse(path, &bytes)?))
     }
@@ -234,8 +233,8 @@ pub fn parse_ini_nls(bytes: &[u8], nls: Nls) -> anyhow::Result<IniFile> {
 
 /// Load and parse an INI file from disk with NLS decoding.
 pub fn load_ini_nls(path: &Path, nls: Nls) -> anyhow::Result<IniFile> {
-    let bytes =
-        fs::read(path).map_err(|e| anyhow::anyhow!("failed to read {}: {e}", path.display()))?;
+    let bytes = vfs::read_all(path)
+        .map_err(|e| anyhow::anyhow!("failed to read {}: {e}", path.display()))?;
     parse_ini_nls(&bytes, nls).map_err(|e| anyhow::anyhow!("{} (file: {})", e, path.display()))
 }
 
@@ -282,7 +281,7 @@ fn parse_ini_text(text: &str) -> anyhow::Result<IniFile> {
 /// Returns `None` if the file does not exist.
 pub fn load_system_ini(root: &Path, nls: Nls) -> anyhow::Result<Option<IniFile>> {
     let path = root.join("SYSTEM.INI");
-    if !path.is_file() {
+    if !vfs::is_file(&path) {
         return Ok(None);
     }
     Ok(Some(load_ini_nls(&path, nls)?))

@@ -28,9 +28,13 @@ pub struct AudioSystem {
 impl AudioSystem {
     pub fn new(config: AudioConfig) -> anyhow::Result<Self> {
         let manager = if config.enabled {
-            Some(AudioManager::<DefaultBackend>::new(
-                AudioManagerSettings::default(),
-            )?)
+            match AudioManager::<DefaultBackend>::new(AudioManagerSettings::default()) {
+                Ok(manager) => Some(manager),
+                Err(error) => {
+                    log::warn!("audio backend initialization failed; audio disabled: {error:#}");
+                    None
+                }
+            }
         } else {
             None
         };
@@ -46,7 +50,7 @@ impl AudioSystem {
             group_volumes.insert(group, PalVolume::MAX);
         }
         Ok(Self {
-            enabled: config.enabled,
+            enabled: manager.is_some(),
             manager,
             groups,
             primary_volume: PalVolume::MAX,

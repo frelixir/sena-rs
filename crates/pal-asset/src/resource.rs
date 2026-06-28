@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use crate::archive_dat::parse_archive_dat_paths;
@@ -8,6 +7,7 @@ use crate::error::{AssetError, Result};
 use crate::key::{make_pac_key, PacKey};
 use crate::nls::Nls;
 use crate::pac::PacArchive;
+use crate::vfs;
 
 #[derive(Clone, Debug)]
 pub enum AssetSource {
@@ -78,7 +78,7 @@ impl ResourceManager {
         let paths = self.paths.clone();
         for path in paths {
             let pac_path = self.pac_path_for_base(&path);
-            if pac_path.exists() {
+            if vfs::is_file(&pac_path) {
                 self.ensure_pac_loaded(&pac_path)?;
             }
         }
@@ -124,8 +124,8 @@ impl ResourceManager {
         key: &PacKey,
     ) -> Result<Option<LoadedAsset>> {
         let loose = self.loose_path_for_base(base, name);
-        if loose.is_file() {
-            let bytes = fs::read(&loose).map_err(|e| AssetError::io(&loose, e))?;
+        if vfs::is_file(&loose) {
+            let bytes = vfs::read_all(&loose)?;
             return Ok(Some(LoadedAsset {
                 name: name.to_owned(),
                 bytes,
@@ -134,7 +134,7 @@ impl ResourceManager {
         }
 
         let pac_path = self.pac_path_for_base(base);
-        if !pac_path.is_file() {
+        if !vfs::is_file(&pac_path) {
             return Ok(None);
         }
         let pac = self.ensure_pac_loaded(&pac_path)?;
@@ -153,8 +153,8 @@ impl ResourceManager {
 
     fn try_open_in_root(&mut self, name: &str, key: &PacKey) -> Result<Option<LoadedAsset>> {
         let loose = join_pal_path(&self.root, name);
-        if loose.is_file() {
-            let bytes = fs::read(&loose).map_err(|e| AssetError::io(&loose, e))?;
+        if vfs::is_file(&loose) {
+            let bytes = vfs::read_all(&loose)?;
             return Ok(Some(LoadedAsset {
                 name: name.to_owned(),
                 bytes,
@@ -163,7 +163,7 @@ impl ResourceManager {
         }
 
         let pac_path = append_pac_extension(&self.root);
-        if pac_path.is_file() {
+        if vfs::is_file(&pac_path) {
             let pac = self.ensure_pac_loaded(&pac_path)?;
             if let Some(bytes) = pac.read_key(key)? {
                 return Ok(Some(LoadedAsset {

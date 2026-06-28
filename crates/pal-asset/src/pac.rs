@@ -1,11 +1,10 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use crate::error::{AssetError, Result};
 use crate::key::{first_bucket_byte, key_display_lossy, PacKey};
 use crate::nls::Nls;
+use crate::vfs;
 
 const PAC_BUCKET_TABLE_OFFSET: usize = 0x0C;
 const PAC_BUCKET_COUNT: usize = 255;
@@ -51,25 +50,20 @@ enum PacStorage {
 impl PacArchive {
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let mut file = File::open(&path).map_err(|e| AssetError::io(&path, e))?;
-        let len = file.metadata().map_err(|e| AssetError::io(&path, e))?.len() as usize;
+        let len = vfs::file_len(&path)?;
         if len < PAC_RECORD_BASE {
             return Err(AssetError::PacTooSmall { path, len });
         }
 
-        let mut header = vec![0u8; PAC_RECORD_BASE];
-        file.read_exact(&mut header)
-            .map_err(|e| AssetError::io(&path, e))?;
+        let header = vfs::read_range(&path, 0, PAC_RECORD_BASE)?;
         let buckets = parse_buckets(&path, &header)?;
         let record_table_end = record_table_end(&path, len, &buckets)?;
         let record_bytes_len = record_table_end.saturating_sub(PAC_RECORD_BASE);
-        let mut record_bytes = vec![0u8; record_bytes_len];
-        if record_bytes_len > 0 {
-            file.seek(SeekFrom::Start(PAC_RECORD_BASE as u64))
-                .map_err(|e| AssetError::io(&path, e))?;
-            file.read_exact(&mut record_bytes)
-                .map_err(|e| AssetError::io(&path, e))?;
-        }
+        let record_bytes = if record_bytes_len > 0 {
+            vfs::read_range(&path, PAC_RECORD_BASE, record_bytes_len)?
+        } else {
+            Vec::new()
+        };
         Self::from_parts(path, len, buckets, &record_bytes, PacStorage::File)
     }
 
@@ -207,15 +201,7 @@ impl PacArchive {
         let end = start + entry.data_size as usize;
         match &self.storage {
             PacStorage::Memory(bytes) => Ok(bytes[start..end].to_vec()),
-            PacStorage::File => {
-                let mut file = File::open(&self.path).map_err(|e| AssetError::io(&self.path, e))?;
-                file.seek(SeekFrom::Start(start as u64))
-                    .map_err(|e| AssetError::io(&self.path, e))?;
-                let mut bytes = vec![0u8; entry.data_size as usize];
-                file.read_exact(&mut bytes)
-                    .map_err(|e| AssetError::io(&self.path, e))?;
-                Ok(bytes)
-            }
+            PacStorage::File => vfs::read_range(&self.path, start, entry.data_size as usize),
         }
     }
 

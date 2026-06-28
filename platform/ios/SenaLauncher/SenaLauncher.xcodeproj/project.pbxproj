@@ -1,0 +1,437 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		021CB595406812646BB97CA4 /* Sena.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = FC3FBA8F1B461E5270BE9A4C /* Sena.xcframework */; };
+		0C70C12680852A1A2E61FBCE /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 55D6246BF653E3EC81F5CB71 /* Foundation.framework */; };
+		1CAC87B99D0BA8DAC6D954B3 /* UIKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 80DE69F8000C1512BAAD8AF0 /* UIKit.framework */; };
+		1D739E083A1119AE80BE19C5 /* CoreVideo.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F867A0A535EDCB4F58189B3A /* CoreVideo.framework */; };
+		432AE57FD304E5ECFC223DA7 /* ZipImporter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E8F24BD80AA5D02BBE0C391 /* ZipImporter.swift */; };
+		6330691E2703AA72A288CC85 /* CoreGraphics.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 690985BED4F6B86886430FBE /* CoreGraphics.framework */; };
+		751E243F05AFC2036C9DC97E /* Metal.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 93170C2D57AED9ADB91750F6 /* Metal.framework */; };
+		8BD60EC9C66693AF0B18B13E /* VideoToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 50861D8CA59786501F14B960 /* VideoToolbox.framework */; };
+		936C4837B665766CC777B8EA /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D810542FB02F5EA42C811431 /* ContentView.swift */; };
+		9585D56D4620497F57D4FAF3 /* GameLibrary.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8C58BF7B9C8047D4555615D /* GameLibrary.swift */; };
+		AE7AA37CA770113CEA83E00D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 209E61D5D5B23BD3871DCE1C /* Assets.xcassets */; };
+		B7AC665790AAD7C8FD57F1DD /* MetalKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CF5816857280630DFA32593A /* MetalKit.framework */; };
+		C21D50475E6CDADDC0438892 /* SenaPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9EED0D334AD0C6E77EBADD36 /* SenaPlayer.swift */; };
+		CB2B14CBFE81F6FF7A18DBB8 /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CC8CEEBA989C89FADB2482C5 /* CoreMedia.framework */; };
+		CF377698A230C013A9DB36D1 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 55FE49D4C077143A08E04C70 /* AVFoundation.framework */; };
+		E206005BA5DF40E848693C1B /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 72595BF2A047DD85DCEA59CE /* AudioToolbox.framework */; };
+		EDD579442B31AB7E59387E1C /* SenaLauncherApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41B19AC1CF8DE3DD92D88204 /* SenaLauncherApp.swift */; };
+		F4BDC634BFF8A5BD252BC6C9 /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 0322257297A8F694AAC73CFD /* LaunchScreen.storyboard */; };
+		FD2AF1DCB40FDD68EEADD128 /* QuartzCore.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9FA67E41B5C19D3B89E7E861 /* QuartzCore.framework */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0322257297A8F694AAC73CFD /* LaunchScreen.storyboard */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; path = LaunchScreen.storyboard; sourceTree = "<group>"; };
+		209E61D5D5B23BD3871DCE1C /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		41B19AC1CF8DE3DD92D88204 /* SenaLauncherApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SenaLauncherApp.swift; sourceTree = "<group>"; };
+		50861D8CA59786501F14B960 /* VideoToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = VideoToolbox.framework; path = System/Library/Frameworks/VideoToolbox.framework; sourceTree = SDKROOT; };
+		5393B77A90297E2DA3448571 /* sena.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = sena.h; sourceTree = "<group>"; };
+		55D6246BF653E3EC81F5CB71 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
+		55FE49D4C077143A08E04C70 /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		690985BED4F6B86886430FBE /* CoreGraphics.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreGraphics.framework; path = System/Library/Frameworks/CoreGraphics.framework; sourceTree = SDKROOT; };
+		72595BF2A047DD85DCEA59CE /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
+		80DE69F8000C1512BAAD8AF0 /* UIKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UIKit.framework; path = System/Library/Frameworks/UIKit.framework; sourceTree = SDKROOT; };
+		93170C2D57AED9ADB91750F6 /* Metal.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Metal.framework; path = System/Library/Frameworks/Metal.framework; sourceTree = SDKROOT; };
+		9E8F24BD80AA5D02BBE0C391 /* ZipImporter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ZipImporter.swift; sourceTree = "<group>"; };
+		9EED0D334AD0C6E77EBADD36 /* SenaPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SenaPlayer.swift; sourceTree = "<group>"; };
+		9FA67E41B5C19D3B89E7E861 /* QuartzCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = QuartzCore.framework; path = System/Library/Frameworks/QuartzCore.framework; sourceTree = SDKROOT; };
+		A3A73509DA0BBA2801FACB55 /* SenaLauncher.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SenaLauncher.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		BFDDCD11A72E90B99F26A5B5 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		C8C58BF7B9C8047D4555615D /* GameLibrary.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameLibrary.swift; sourceTree = "<group>"; };
+		CC8CEEBA989C89FADB2482C5 /* CoreMedia.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMedia.framework; path = System/Library/Frameworks/CoreMedia.framework; sourceTree = SDKROOT; };
+		CF5816857280630DFA32593A /* MetalKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = MetalKit.framework; path = System/Library/Frameworks/MetalKit.framework; sourceTree = SDKROOT; };
+		D810542FB02F5EA42C811431 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		F867A0A535EDCB4F58189B3A /* CoreVideo.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreVideo.framework; path = System/Library/Frameworks/CoreVideo.framework; sourceTree = SDKROOT; };
+		FC3FBA8F1B461E5270BE9A4C /* Sena.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; name = Sena.xcframework; path = Vendor/Sena.xcframework; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		D43C3BB173723F3A2E34AC97 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				1CAC87B99D0BA8DAC6D954B3 /* UIKit.framework in Frameworks */,
+				0C70C12680852A1A2E61FBCE /* Foundation.framework in Frameworks */,
+				8BD60EC9C66693AF0B18B13E /* VideoToolbox.framework in Frameworks */,
+				CB2B14CBFE81F6FF7A18DBB8 /* CoreMedia.framework in Frameworks */,
+				1D739E083A1119AE80BE19C5 /* CoreVideo.framework in Frameworks */,
+				CF377698A230C013A9DB36D1 /* AVFoundation.framework in Frameworks */,
+				751E243F05AFC2036C9DC97E /* Metal.framework in Frameworks */,
+				B7AC665790AAD7C8FD57F1DD /* MetalKit.framework in Frameworks */,
+				FD2AF1DCB40FDD68EEADD128 /* QuartzCore.framework in Frameworks */,
+				6330691E2703AA72A288CC85 /* CoreGraphics.framework in Frameworks */,
+				E206005BA5DF40E848693C1B /* AudioToolbox.framework in Frameworks */,
+				021CB595406812646BB97CA4 /* Sena.xcframework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		08D964F6F7C08E29E802A409 = {
+			isa = PBXGroup;
+			children = (
+				146807E97A3720726C7D0AAE /* Headers */,
+				96B94E9D13EF856ADE64B85E /* SenaLauncher */,
+				FEF5C787CD796B94A6313D83 /* Frameworks */,
+				85B0D705EFBF163EE410FCC8 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		146807E97A3720726C7D0AAE /* Headers */ = {
+			isa = PBXGroup;
+			children = (
+				5393B77A90297E2DA3448571 /* sena.h */,
+			);
+			path = Headers;
+			sourceTree = "<group>";
+		};
+		85B0D705EFBF163EE410FCC8 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A3A73509DA0BBA2801FACB55 /* SenaLauncher.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		96B94E9D13EF856ADE64B85E /* SenaLauncher */ = {
+			isa = PBXGroup;
+			children = (
+				209E61D5D5B23BD3871DCE1C /* Assets.xcassets */,
+				D810542FB02F5EA42C811431 /* ContentView.swift */,
+				C8C58BF7B9C8047D4555615D /* GameLibrary.swift */,
+				BFDDCD11A72E90B99F26A5B5 /* Info.plist */,
+				0322257297A8F694AAC73CFD /* LaunchScreen.storyboard */,
+				41B19AC1CF8DE3DD92D88204 /* SenaLauncherApp.swift */,
+				9EED0D334AD0C6E77EBADD36 /* SenaPlayer.swift */,
+				9E8F24BD80AA5D02BBE0C391 /* ZipImporter.swift */,
+			);
+			path = SenaLauncher;
+			sourceTree = "<group>";
+		};
+		FEF5C787CD796B94A6313D83 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				72595BF2A047DD85DCEA59CE /* AudioToolbox.framework */,
+				55FE49D4C077143A08E04C70 /* AVFoundation.framework */,
+				690985BED4F6B86886430FBE /* CoreGraphics.framework */,
+				CC8CEEBA989C89FADB2482C5 /* CoreMedia.framework */,
+				F867A0A535EDCB4F58189B3A /* CoreVideo.framework */,
+				55D6246BF653E3EC81F5CB71 /* Foundation.framework */,
+				93170C2D57AED9ADB91750F6 /* Metal.framework */,
+				CF5816857280630DFA32593A /* MetalKit.framework */,
+				9FA67E41B5C19D3B89E7E861 /* QuartzCore.framework */,
+				FC3FBA8F1B461E5270BE9A4C /* Sena.xcframework */,
+				80DE69F8000C1512BAAD8AF0 /* UIKit.framework */,
+				50861D8CA59786501F14B960 /* VideoToolbox.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		50E2D6FEB90D4818CE54C510 /* SenaLauncher */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7A621A750B3B295B305B84CE /* Build configuration list for PBXNativeTarget "SenaLauncher" */;
+			buildPhases = (
+				FB2260FA6581964E2EFCB83B /* Ensure Sena.xcframework headers (sim + device) */,
+				1B9FE0130F3585C78D918378 /* Sources */,
+				3C690FD0513D45356D2032EE /* Resources */,
+				D43C3BB173723F3A2E34AC97 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SenaLauncher;
+			packageProductDependencies = (
+			);
+			productName = SenaLauncher;
+			productReference = A3A73509DA0BBA2801FACB55 /* SenaLauncher.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		71A62DBC5A4DC812B1DEB984 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					50E2D6FEB90D4818CE54C510 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = D894F03C7D08B987AEBA5930 /* Build configuration list for PBXProject "SenaLauncher" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 08D964F6F7C08E29E802A409;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				50E2D6FEB90D4818CE54C510 /* SenaLauncher */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		3C690FD0513D45356D2032EE /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AE7AA37CA770113CEA83E00D /* Assets.xcassets in Resources */,
+				F4BDC634BFF8A5BD252BC6C9 /* LaunchScreen.storyboard in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		FB2260FA6581964E2EFCB83B /* Ensure Sena.xcframework headers (sim + device) */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Ensure Sena.xcframework headers (sim + device)";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\nXC=\"${SRCROOT}/Vendor/Sena.xcframework\"\nif [ ! -d \"$XC\" ]; then\n  echo \"error: missing $XC (build/install Sena.xcframework first)\" >&2\n  exit 1\nfi\n\n# We only fix headers. If the slice directory or binary is missing, fail loudly.\nfor SLICE in ios-arm64 ios-arm64-simulator; do\n  if [ ! -d \"$XC/$SLICE\" ]; then\n    echo \"error: missing slice directory: $XC/$SLICE\" >&2\n    echo \"error: Sena.xcframework is incomplete. Rebuild it (must include simulator slice for sim builds).\" >&2\n    exit 1\n  fi\n  if [ ! -f \"$XC/$SLICE/libsena.a\" ]; then\n    echo \"error: missing $XC/$SLICE/libsena.a\" >&2\n    echo \"error: Sena.xcframework is incomplete. Rebuild it.\" >&2\n    exit 1\n  fi\n\n  if [ ! -d \"$XC/$SLICE/Headers\" ]; then\n    mkdir -p \"$XC/$SLICE/Headers\"\n\n    # Prefer copying from the device slice if it already has headers.\n    if [ -d \"$XC/ios-arm64/Headers\" ]; then\n      cp -f \"$XC/ios-arm64/Headers/\"* \"$XC/$SLICE/Headers/\" 2>/dev/null || true\n    fi\n\n    # Also drop in the project-level header as a fallback.\n    if [ -f \"${SRCROOT}/Headers/sena.h\" ]; then\n      cp -f \"${SRCROOT}/Headers/sena.h\" \"$XC/$SLICE/Headers/sena.h\"\n    fi\n  fi\ndone\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		1B9FE0130F3585C78D918378 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				936C4837B665766CC777B8EA /* ContentView.swift in Sources */,
+				9585D56D4620497F57D4FAF3 /* GameLibrary.swift in Sources */,
+				EDD579442B31AB7E59387E1C /* SenaLauncherApp.swift in Sources */,
+				C21D50475E6CDADDC0438892 /* SenaPlayer.swift in Sources */,
+				432AE57FD304E5ECFC223DA7 /* ZipImporter.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		28AFF80F6C54FD766B5455EB /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.xmoezzz.sena;
+				PRODUCT_NAME = Sena;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		9DD50A378682906E0DEA604B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"Vendor\"",
+				);
+				INFOPLIST_FILE = SenaLauncher/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		DA05CBCFF0CDB2D8D912F440 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"Vendor\"",
+				);
+				INFOPLIST_FILE = SenaLauncher/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		F26162AD8803EAFAFC1EB997 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				IPHONEOS_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.xmoezzz.sena;
+				PRODUCT_NAME = Sena;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		7A621A750B3B295B305B84CE /* Build configuration list for PBXNativeTarget "SenaLauncher" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DA05CBCFF0CDB2D8D912F440 /* Debug */,
+				9DD50A378682906E0DEA604B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		D894F03C7D08B987AEBA5930 /* Build configuration list for PBXProject "SenaLauncher" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				28AFF80F6C54FD766B5455EB /* Debug */,
+				F26162AD8803EAFAFC1EB997 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 71A62DBC5A4DC812B1DEB984 /* Project object */;
+}

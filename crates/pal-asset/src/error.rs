@@ -55,6 +55,10 @@ pub enum AssetError {
         name: String,
         len: usize,
     },
+    Vfs {
+        path: PathBuf,
+        reason: String,
+    },
 }
 
 impl AssetError {
@@ -128,6 +132,14 @@ impl fmt::Display for AssetError {
                 "encrypted PAL file {} is too short: {} bytes, expected at least 0x10",
                 name, len
             ),
+            Self::Vfs { path, reason } => {
+                write!(
+                    f,
+                    "virtual filesystem error at {}: {}",
+                    path.display(),
+                    reason
+                )
+            }
         }
     }
 }

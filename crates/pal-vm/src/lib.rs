@@ -12,18 +12,23 @@ pub mod debug;
 pub mod effect;
 pub mod engine;
 pub mod event;
+pub mod ffi;
 pub mod font;
 pub mod image;
 pub mod input;
 pub mod list;
 pub mod memory;
 pub mod msprite;
+pub mod platform_time;
 pub mod renderer;
 pub mod runtime;
 pub mod scene;
 pub mod sprite;
 pub mod system;
 pub mod task;
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+pub mod wasm_entry;
 
 pub use animation::{
     AnimationFrameRecord, AnimationHandle, PalAnimationFrameRecord, PalSequenceAnimationDesc,

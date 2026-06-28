@@ -12,6 +12,7 @@ mod key;
 mod nls;
 mod pac;
 mod resource;
+pub mod vfs;
 
 pub use archive_dat::parse_archive_dat_paths;
 pub use decrypt::{decrypt_dollar_payload, decrypt_pal_dollar_file};

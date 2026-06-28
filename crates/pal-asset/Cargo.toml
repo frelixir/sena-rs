@@ -7,3 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 encoding_rs.workspace = true
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+js-sys = "0.3"
+wasm-bindgen = "0.2"

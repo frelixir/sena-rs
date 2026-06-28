@@ -8,6 +8,7 @@ rust-version.workspace = true
 [lib]
 name = "pal_vm"
 path = "src/lib.rs"
+crate-type = ["rlib", "cdylib", "staticlib"]
 
 [[bin]]
 name = "sena"
@@ -46,3 +47,23 @@ softbuffer.workspace = true
 wgpu.workspace = true
 wmv-decoder.workspace = true
 winit.workspace = true
+
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+console_error_panic_hook = "0.1"
+js-sys = "0.3"
+wasm-bindgen = "0.2"
+web-sys = { version = "0.3", features = [
+    "CanvasRenderingContext2d",
+    "console",
+    "Document",
+    "Element",
+    "Event",
+    "EventTarget",
+    "HtmlCanvasElement",
+    "ImageData",
+    "KeyboardEvent",
+    "MouseEvent",
+    "Performance",
+    "Window",
+] }
+web-time = "1.1"

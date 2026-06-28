@@ -30,3 +30,15 @@ out/
 tools/
 
 .*/
+/dist/
+dist/
+docs-build/
+
+platform/macos/SenaLauncher/Vendor/librfvp.dylib
+platform/macos/SenaLauncher/Vendor/*
+platform/ios/SenaLauncher/Vendor/librfvp.a
+platform/ios/SenaLauncher/Vendor/*
+platform/wasm/pkg/*
+
+.metals/
+*.efi

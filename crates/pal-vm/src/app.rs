@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 
 use pal_asset::Nls;
 use winit::application::ApplicationHandler;
@@ -13,6 +12,7 @@ use winit::window::{Window, WindowId};
 use crate::audio::AudioConfig;
 use crate::engine::{Engine, EngineConfig, TraceConfig};
 use crate::event::{InputEvent, MouseButton, PalEvent};
+use crate::platform_time::{Duration, Instant};
 use crate::renderer::{RenderOutcome, Renderer, RendererConfig};
 use crate::runtime::{RuntimeStatus, ScriptRuntimeConfig};
 use crate::scene::{rasterize_scene_rgba, FrameScene};
@@ -781,7 +781,7 @@ impl SenaConfig {
     }
 }
 
-fn build_engine(config: &SenaConfig) -> anyhow::Result<Engine> {
+pub(crate) fn build_engine(config: &SenaConfig) -> anyhow::Result<Engine> {
     Engine::new(EngineConfig {
         game_root: config.game_root.clone(),
         nls: config.nls,
