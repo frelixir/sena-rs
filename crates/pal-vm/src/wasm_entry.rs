@@ -20,14 +20,18 @@ use crate::scene::rasterize_scene_rgba;
 use crate::SenaConfig;
 
 #[wasm_bindgen]
-pub fn start_sena_from_directory(canvas_id: String, _files_json: String) -> Result<(), JsValue> {
+pub fn start_sena_from_directory(
+    canvas_id: String,
+    _files_json: String,
+    nls: String,
+) -> Result<(), JsValue> {
     console_error_panic_hook::set_once();
-    WasmPlayer::start(canvas_id)
+    WasmPlayer::start(canvas_id, parse_nls(&nls)?)
 }
 
 #[wasm_bindgen]
 pub fn sena_wasm_start(canvas_id: &str) -> Result<(), JsValue> {
-    start_sena_from_directory(canvas_id.to_owned(), String::new())
+    start_sena_from_directory(canvas_id.to_owned(), String::new(), String::from("sjis"))
 }
 
 #[wasm_bindgen]
@@ -69,7 +73,7 @@ struct WasmPlayer {
 }
 
 impl WasmPlayer {
-    fn start(canvas_id: String) -> Result<(), JsValue> {
+    fn start(canvas_id: String, nls: Nls) -> Result<(), JsValue> {
         if js_sena_known_file_count() == 0 {
             return Err(JsValue::from_str("no Sena files are registered"));
         }
@@ -91,7 +95,7 @@ impl WasmPlayer {
 
         let mut engine = build_engine(&SenaConfig {
             game_root: Some(PathBuf::from(".")),
-            nls: Nls::ShiftJis,
+            nls,
             audio: AudioConfig::default(),
             ..SenaConfig::default()
         })
@@ -262,6 +266,12 @@ fn request_animation_frame(callback: &Function) -> Result<i32, JsValue> {
     web_sys::window()
         .ok_or_else(|| JsValue::from_str("window is unavailable"))?
         .request_animation_frame(callback)
+}
+
+fn parse_nls(value: &str) -> Result<Nls, JsValue> {
+    value
+        .parse::<Nls>()
+        .map_err(|e| JsValue::from_str(&format!("invalid NLS: {e}")))
 }
 
 fn map_mouse_button(button: i16) -> MouseButton {

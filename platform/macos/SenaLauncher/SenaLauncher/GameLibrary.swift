@@ -31,6 +31,27 @@ private func senaGameCoverPath(for dir: URL) -> String? {
     }
 }
 
+enum NlsChoice: String, CaseIterable, Codable, Identifiable {
+    case shiftJis = "sjis"
+    case gbk = "gbk"
+    case utf8 = "utf-8"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .shiftJis: return "ShiftJIS"
+        case .gbk: return "GBK"
+        case .utf8: return "UTF-8"
+        }
+    }
+
+    static func normalized(_ value: String?) -> NlsChoice {
+        guard let value else { return .shiftJis }
+        return Self(rawValue: value.lowercased()) ?? .shiftJis
+    }
+}
+
 // -----------------------------
 // Model
 // -----------------------------
@@ -41,14 +62,26 @@ struct GameEntry: Identifiable, Codable, Equatable {
     var addedAtUnix: Int64
     var lastPlayedAtUnix: Int64?
     var coverPath: String?
+    var nls: String
 
-    init(id: String, title: String, rootPath: String, addedAtUnix: Int64, lastPlayedAtUnix: Int64? = nil, coverPath: String? = nil) {
+    init(id: String, title: String, rootPath: String, addedAtUnix: Int64, lastPlayedAtUnix: Int64? = nil, coverPath: String? = nil, nls: String = NlsChoice.shiftJis.rawValue) {
         self.id = id
         self.title = title
         self.rootPath = rootPath
         self.addedAtUnix = addedAtUnix
         self.lastPlayedAtUnix = lastPlayedAtUnix
         self.coverPath = coverPath
+        self.nls = NlsChoice.normalized(nls).rawValue
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case title
+        case rootPath
+        case addedAtUnix
+        case lastPlayedAtUnix
+        case coverPath
+        case nls
     }
 
     init(from decoder: Decoder) throws {
@@ -59,6 +92,7 @@ struct GameEntry: Identifiable, Codable, Equatable {
         addedAtUnix = try c.decode(Int64.self, forKey: .addedAtUnix)
         lastPlayedAtUnix = try c.decodeIfPresent(Int64.self, forKey: .lastPlayedAtUnix)
         coverPath = try c.decodeIfPresent(String.self, forKey: .coverPath)
+        nls = NlsChoice.normalized(try c.decodeIfPresent(String.self, forKey: .nls)).rawValue
     }
 }
 
@@ -68,6 +102,7 @@ struct PendingImport: Identifiable {
     let rootPath: String
     let title: String
     let coverPath: String?
+    var nls: NlsChoice = .shiftJis
 }
 
 @MainActor
@@ -152,8 +187,9 @@ final class GameLibrary: ObservableObject {
             games[idx].rootPath = p.rootPath
             games[idx].title = p.title
             games[idx].coverPath = p.coverPath
+            games[idx].nls = p.nls.rawValue
         } else {
-            games.append(GameEntry(id: p.id, title: p.title, rootPath: p.rootPath, addedAtUnix: now, coverPath: p.coverPath))
+            games.append(GameEntry(id: p.id, title: p.title, rootPath: p.rootPath, addedAtUnix: now, coverPath: p.coverPath, nls: p.nls.rawValue))
         }
         pendingImport = nil
         save()
@@ -198,6 +234,13 @@ final class GameLibrary: ObservableObject {
 
     func revealInFinder(game: GameEntry) {
         NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: game.rootPath)])
+    }
+
+    func updateNls(game: GameEntry, nls: NlsChoice) {
+        if let idx = games.firstIndex(where: { $0.id == game.id }) {
+            games[idx].nls = nls.rawValue
+            save()
+        }
     }
 
     func loadCoverImage(game: GameEntry) -> NSImage? {

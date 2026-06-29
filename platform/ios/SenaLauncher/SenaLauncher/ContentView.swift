@@ -6,27 +6,25 @@ struct ContentView: View {
     @State private var isLaunching: Bool = false
 
     private let columns: [GridItem] = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12),
+        GridItem(.adaptive(minimum: 150, maximum: 210), spacing: 10),
     ]
 
     var body: some View {
         ZStack {
-            VStack(spacing: 10) {
+            VStack(spacing: 8) {
                 header
                 Divider()
-                Text("Copy game folders into Files → On My iPhone → Sena → sena, then tap Rescan.")
+                Text("Copy games into Files → On My iPhone → Sena → sena, then tap Rescan.")
                     .font(.footnote)
                     .foregroundColor(.secondary)
                     .padding(.horizontal, 12)
                 ScrollView(.vertical) {
-                    LazyVGrid(columns: columns, spacing: 12) {
+                    LazyVGrid(columns: columns, spacing: 10) {
                         ForEach(library.games) { game in
                             GameTileView(game: game, isLaunching: $isLaunching)
                         }
                     }
-                    .padding(12)
+                    .padding(10)
                 }
             }
             .alert(isPresented: $library.showError) {
@@ -57,11 +55,18 @@ struct ContentView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Text("Sena")
                 .font(.headline)
 
             Spacer()
+
+            Picker("NLS", selection: $library.defaultNls) {
+                ForEach(NlsChoice.allCases) { choice in
+                    Text(choice.label).tag(choice)
+                }
+            }
+            .pickerStyle(.menu)
 
             Button("Rescan") {
                 library.rescanFromDocuments()
@@ -79,7 +84,7 @@ struct GameTileView: View {
     @Binding var isLaunching: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             ZStack(alignment: .topTrailing) {
                 RoundedRectangle(cornerRadius: 12)
                     .fill(Color(UIColor.secondarySystemBackground))
@@ -100,7 +105,7 @@ struct GameTileView: View {
                 }
 
             }
-            .frame(height: 130)
+            .frame(height: 104)
 
             Text(game.title)
                 .font(.subheadline)
@@ -111,7 +116,7 @@ struct GameTileView: View {
                 .foregroundColor(.secondary)
                 .lineLimit(1)
 
-            HStack {
+            HStack(spacing: 8) {
                 Button("Play") {
                     isLaunching = true
                     DispatchQueue.main.async {
@@ -121,11 +126,19 @@ struct GameTileView: View {
 
                 Spacer()
 
-                Button("Remove") {
-                    library.remove(game: game)
+                Menu(NlsChoice.normalized(game.nls).label) {
+                    ForEach(NlsChoice.allCases) { choice in
+                        Button(choice.label) {
+                            library.updateNls(game: game, nls: choice)
+                        }
+                    }
+                    Divider()
+                    Button("Remove") {
+                        library.remove(game: game)
+                    }
                 }
             }
         }
-        .padding(10)
+        .padding(8)
     }
 }

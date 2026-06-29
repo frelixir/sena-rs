@@ -32,6 +32,27 @@ private func senaGameCoverPath(for dir: URL) -> String? {
     }
 }
 
+enum NlsChoice: String, CaseIterable, Codable, Identifiable {
+    case shiftJis = "sjis"
+    case gbk = "gbk"
+    case utf8 = "utf-8"
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .shiftJis: return "ShiftJIS"
+        case .gbk: return "GBK"
+        case .utf8: return "UTF-8"
+        }
+    }
+
+    static func normalized(_ value: String?) -> NlsChoice {
+        guard let value else { return .shiftJis }
+        return Self(rawValue: value.lowercased()) ?? .shiftJis
+    }
+}
+
 struct GameEntry: Identifiable, Codable, Equatable {
     let id: String
     var title: String
@@ -40,6 +61,7 @@ struct GameEntry: Identifiable, Codable, Equatable {
     var addedAtUnix: Int64
     var lastPlayedAtUnix: Int64?
     var coverPath: String?
+    var nls: String
 
     init(
         id: String,
@@ -47,7 +69,8 @@ struct GameEntry: Identifiable, Codable, Equatable {
         rootPath: String,
         addedAtUnix: Int64,
         lastPlayedAtUnix: Int64? = nil,
-        coverPath: String? = nil
+        coverPath: String? = nil,
+        nls: String = NlsChoice.shiftJis.rawValue
     ) {
         self.id = id
         self.title = title
@@ -55,6 +78,7 @@ struct GameEntry: Identifiable, Codable, Equatable {
         self.addedAtUnix = addedAtUnix
         self.lastPlayedAtUnix = lastPlayedAtUnix
         self.coverPath = coverPath
+        self.nls = NlsChoice.normalized(nls).rawValue
     }
 
     enum CodingKeys: String, CodingKey {
@@ -64,6 +88,7 @@ struct GameEntry: Identifiable, Codable, Equatable {
         case addedAtUnix
         case lastPlayedAtUnix
         case coverPath
+        case nls
     }
 
     init(from decoder: Decoder) throws {
@@ -74,6 +99,7 @@ struct GameEntry: Identifiable, Codable, Equatable {
         addedAtUnix = try c.decode(Int64.self, forKey: .addedAtUnix)
         lastPlayedAtUnix = try c.decodeIfPresent(Int64.self, forKey: .lastPlayedAtUnix)
         coverPath = try c.decodeIfPresent(String.self, forKey: .coverPath)
+        nls = NlsChoice.normalized(try c.decodeIfPresent(String.self, forKey: .nls)).rawValue
     }
 
     func encode(to encoder: Encoder) throws {
@@ -84,6 +110,7 @@ struct GameEntry: Identifiable, Codable, Equatable {
         try c.encode(addedAtUnix, forKey: .addedAtUnix)
         try c.encodeIfPresent(lastPlayedAtUnix, forKey: .lastPlayedAtUnix)
         try c.encodeIfPresent(coverPath, forKey: .coverPath)
+        try c.encode(NlsChoice.normalized(nls).rawValue, forKey: .nls)
     }
 }
 
@@ -91,6 +118,11 @@ final class GameLibrary: ObservableObject {
     @Published var games: [GameEntry] = []
     @Published var showError: Bool = false
     @Published var errorMessage: String = ""
+    @Published var defaultNls: NlsChoice {
+        didSet {
+            UserDefaults.standard.set(defaultNls.rawValue, forKey: "SenaLauncher.defaultNls")
+        }
+    }
 
     // When non-nil, present the in-app player (iOS host-mode).
     @Published var activeGame: GameEntry? = nil
@@ -125,6 +157,7 @@ final class GameLibrary: ObservableObject {
     }
 
     init() {
+        defaultNls = NlsChoice.normalized(UserDefaults.standard.string(forKey: "SenaLauncher.defaultNls"))
         // Ensure the Files-visible folder exists as early as possible.
         _ = documentsGamesDir
         load()
@@ -181,8 +214,9 @@ final class GameLibrary: ObservableObject {
             let addedAt = saved?.addedAtUnix ?? now
             let lastPlayed = saved?.lastPlayedAtUnix
             let coverPath = senaGameCoverPath(for: gameRoot)
+            let nls = saved?.nls ?? defaultNls.rawValue
 
-            out.append(GameEntry(id: id, title: title, rootPath: gameRoot.path, addedAtUnix: addedAt, lastPlayedAtUnix: lastPlayed, coverPath: coverPath))
+            out.append(GameEntry(id: id, title: title, rootPath: gameRoot.path, addedAtUnix: addedAt, lastPlayedAtUnix: lastPlayed, coverPath: coverPath, nls: nls))
         }
 
         // Stable-ish ordering: recently played first, then newest.
@@ -214,6 +248,13 @@ final class GameLibrary: ObservableObject {
         }
         // Present the in-app player (SwiftUI owns the main loop).
         activeGame = game
+    }
+
+    func updateNls(game: GameEntry, nls: NlsChoice) {
+        if let idx = games.firstIndex(where: { $0.id == game.id }) {
+            games[idx].nls = nls.rawValue
+            save()
+        }
     }
 
     // MARK: - Helpers

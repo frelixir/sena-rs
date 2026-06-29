@@ -1,6 +1,7 @@
 import init, { start_sena_from_directory } from "./pkg/pal_vm.js";
 
 const input = document.getElementById("game-dir");
+const nlsSelect = document.getElementById("nls-select");
 const rescanButton = document.getElementById("rescan-button");
 const statusLine = document.getElementById("status-line");
 const errorBox = document.getElementById("error-box");
@@ -19,6 +20,19 @@ let selectedFileList = null;
 let selectedRootName = "";
 let games = [];
 let running = false;
+
+function selectedNls() {
+  return nlsSelect && nlsSelect.value ? nlsSelect.value : "sjis";
+}
+
+function nlsLabel(value) {
+  switch (String(value || "").toLowerCase()) {
+    case "gbk": return "GBK";
+    case "utf-8":
+    case "utf8": return "UTF-8";
+    default: return "ShiftJIS";
+  }
+}
 
 const filesByPath = new Map();
 const filesByLowerPath = new Map();
@@ -146,6 +160,7 @@ async function buildGamesFromFileList(fileList) {
       rootPath: rootName,
       entries: rootEntries,
       lastPlayed: getLastPlayed(id),
+      nls: selectedNls(),
     }];
   }
 
@@ -174,6 +189,7 @@ async function buildGamesFromFileList(fileList) {
       rootPath: `${rootName}/${groupName}`,
       entries,
       lastPlayed: getLastPlayed(id),
+      nls: selectedNls(),
     });
   }
 
@@ -211,7 +227,7 @@ function renderLibrary() {
 
     const meta = document.createElement("div");
     meta.className = "game-meta";
-    meta.textContent = `${game.entries.length} file(s)`;
+    meta.textContent = `${game.entries.length} file(s) · ${nlsLabel(game.nls)}`;
 
     const actions = document.createElement("div");
     actions.className = "tile-actions";
@@ -223,6 +239,20 @@ function renderLibrary() {
     const grow = document.createElement("div");
     grow.className = "grow";
 
+    const nls = document.createElement("select");
+    nls.className = "tile-nls";
+    for (const [value, label] of [["sjis", "ShiftJIS"], ["gbk", "GBK"], ["utf-8", "UTF-8"]]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      if (value === game.nls) option.selected = true;
+      nls.append(option);
+    }
+    nls.addEventListener("change", () => {
+      game.nls = selectedNlsValue(nls.value);
+      renderLibrary();
+    });
+
     const remove = document.createElement("button");
     remove.className = "danger";
     remove.textContent = "Remove";
@@ -232,10 +262,15 @@ function renderLibrary() {
       setStatus(games.length === 0 ? "No games in library." : `${games.length} game(s) in library.`);
     });
 
-    actions.append(play, grow, remove);
+    actions.append(play, grow, nls, remove);
     tile.append(poster, title, path, meta, actions);
     grid.append(tile);
   }
+}
+
+function selectedNlsValue(value) {
+  const normalized = String(value || "").toLowerCase();
+  return normalized === "gbk" || normalized === "utf-8" || normalized === "utf8" ? (normalized === "utf8" ? "utf-8" : normalized) : "sjis";
 }
 
 async function scanCurrentSelection() {
@@ -426,7 +461,7 @@ async function launchGame(game) {
     canvas.focus();
 
     showLaunching("Launching…");
-    await start_sena_from_directory("sena-canvas", JSON.stringify(files));
+    await start_sena_from_directory("sena-canvas", JSON.stringify(files), selectedNlsValue(game.nls));
 
     hideLaunching();
     setStatus("Running.");

@@ -12,6 +12,12 @@
       <header id="header">
         <div id="brand">sena</div>
         <div id="header-spacer"></div>
+        <label class="field-label" for="nls-select">NLS</label>
+        <select id="nls-select">
+          <option value="sjis" selected>ShiftJIS</option>
+          <option value="gbk">GBK</option>
+          <option value="utf-8">UTF-8</option>
+        </select>
         <label class="file-button secondary" for="game-dir">Choose Folder</label>
         <input id="game-dir" type="file" webkitdirectory multiple />
         <button id="rescan-button" class="secondary" disabled>Rescan</button>

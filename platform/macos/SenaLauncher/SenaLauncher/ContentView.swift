@@ -62,6 +62,7 @@ struct ContentView: View {
 struct ImportNlsSheet: View {
     @EnvironmentObject var library: GameLibrary
     let pending: PendingImport
+    @State private var selectedNls: NlsChoice = .shiftJis
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -72,13 +73,22 @@ struct ImportNlsSheet: View {
                 .font(.subheadline)
                 .foregroundColor(.secondary)
 
+            Picker("NLS", selection: $selectedNls) {
+                ForEach(NlsChoice.allCases) { choice in
+                    Text(choice.label).tag(choice)
+                }
+            }
+            .pickerStyle(.segmented)
+
             HStack {
                 Spacer()
                 Button("Cancel") {
                     library.pendingImport = nil
                 }
                 Button("Import") {
-                    library.commitImport(p: pending)
+                    var updated = pending
+                    updated.nls = selectedNls
+                    library.commitImport(p: updated)
                 }
                 .keyboardShortcut(.defaultAction)
             }
@@ -124,6 +134,10 @@ struct GameTileView: View {
                 .foregroundColor(.secondary)
                 .lineLimit(1)
 
+            Text(NlsChoice.normalized(game.nls).label)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+
             HStack {
                 Button("Play") {
                     library.launch(game: game)
@@ -133,6 +147,14 @@ struct GameTileView: View {
                 Spacer()
 
                 Menu {
+                    Picker("NLS", selection: Binding(
+                        get: { NlsChoice.normalized(game.nls) },
+                        set: { library.updateNls(game: game, nls: $0) }
+                    )) {
+                        ForEach(NlsChoice.allCases) { choice in
+                            Text(choice.label).tag(choice)
+                        }
+                    }
                     Button("Reveal in Finder") {
                         library.revealInFinder(game: game)
                     }

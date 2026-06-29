@@ -175,6 +175,15 @@ pub unsafe extern "C" fn sena_game_cover_mime_from_dir(
 /// Runs the desktop Sena engine with `game_root_utf8` as the game directory.
 #[no_mangle]
 pub unsafe extern "C" fn sena_run_entry(game_root_utf8: *const c_char) -> i32 {
+    sena_run_entry_nls(game_root_utf8, ptr::null())
+}
+
+/// Runs the desktop Sena engine with an explicit text/resource encoding.
+#[no_mangle]
+pub unsafe extern "C" fn sena_run_entry_nls(
+    game_root_utf8: *const c_char,
+    nls_utf8: *const c_char,
+) -> i32 {
     let game_root = match path_from_cstr(game_root_utf8) {
         Ok(path) => path,
         Err(err) => {
@@ -185,6 +194,7 @@ pub unsafe extern "C" fn sena_run_entry(game_root_utf8: *const c_char) -> i32 {
 
     match crate::run_sena(crate::SenaConfig {
         game_root: Some(game_root),
+        nls: nls_from_cstr(nls_utf8),
         ..Default::default()
     }) {
         Ok(()) => 0,
@@ -370,14 +380,9 @@ pub unsafe extern "C" fn sena_android_create(
     surface_height_px: u32,
     _native_scale_factor: f64,
     game_dir_utf8: *const c_char,
+    nls_utf8: *const c_char,
 ) -> *mut c_void {
-    let nls = CString::new("sjis").expect("static string is valid CString");
-    sena_host_create(
-        game_dir_utf8,
-        nls.as_ptr(),
-        surface_width_px,
-        surface_height_px,
-    )
+    sena_host_create(game_dir_utf8, nls_utf8, surface_width_px, surface_height_px)
 }
 
 #[no_mangle]
@@ -457,9 +462,9 @@ pub unsafe extern "C" fn sena_ios_create(
     surface_height: u32,
     _native_scale_factor: f64,
     game_root_utf8: *const c_char,
+    nls_utf8: *const c_char,
 ) -> *mut c_void {
-    let nls = CString::new("sjis").expect("static string is valid CString");
-    sena_host_create(game_root_utf8, nls.as_ptr(), surface_width, surface_height)
+    sena_host_create(game_root_utf8, nls_utf8, surface_width, surface_height)
 }
 
 #[no_mangle]
@@ -560,8 +565,15 @@ pub struct SenaPumpHandle {
 
 #[no_mangle]
 pub unsafe extern "C" fn sena_pump_create(game_root_utf8: *const c_char) -> *mut SenaPumpHandle {
-    let nls = CString::new("sjis").expect("static string is valid CString");
-    sena_host_create(game_root_utf8, nls.as_ptr(), 1280, 720) as *mut SenaPumpHandle
+    sena_pump_create_nls(game_root_utf8, ptr::null())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn sena_pump_create_nls(
+    game_root_utf8: *const c_char,
+    nls_utf8: *const c_char,
+) -> *mut SenaPumpHandle {
+    sena_host_create(game_root_utf8, nls_utf8, 1280, 720) as *mut SenaPumpHandle
 }
 
 #[no_mangle]

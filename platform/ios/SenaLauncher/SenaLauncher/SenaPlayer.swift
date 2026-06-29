@@ -10,7 +10,8 @@ private func sena_ios_create(
     _ widthPx: UInt32,
     _ heightPx: UInt32,
     _ nativeScaleFactor: Double,
-    _ gameRootUtf8: UnsafePointer<CChar>
+    _ gameRootUtf8: UnsafePointer<CChar>,
+    _ nlsUtf8: UnsafePointer<CChar>
 ) -> UnsafeMutableRawPointer?
 
 @_silgen_name("sena_ios_step")
@@ -148,6 +149,7 @@ final class SenaMetalView: UIView {
 
 final class SenaPlayerViewController: UIViewController {
     private let gameRoot: String
+    private let nls: String
     private let onExit: () -> Void
 
     private var metalView: SenaMetalView { view as! SenaMetalView }
@@ -163,8 +165,9 @@ final class SenaPlayerViewController: UIViewController {
     private var viewportPx: (UInt32, UInt32, UInt32, UInt32) = (0, 0, 1, 1)
     private var viewportPoints: CGRect = CGRect(x: 0, y: 0, width: 1, height: 1)
 
-    init(gameRoot: String, onExit: @escaping () -> Void) {
+    init(gameRoot: String, nls: String, onExit: @escaping () -> Void) {
         self.gameRoot = gameRoot
+        self.nls = NlsChoice.normalized(nls).rawValue
         self.onExit = onExit
         super.init(nibName: nil, bundle: nil)
         modalPresentationStyle = .fullScreen
@@ -247,20 +250,22 @@ final class SenaPlayerViewController: UIViewController {
         let viewPtr = UnsafeMutableRawPointer(Unmanaged.passUnretained(metalView).toOpaque())
 
         gameRoot.withCString { gameC in
-            let hnd = sena_ios_create(viewPtr, wPx, hPx, scale, gameC)
-            self.handle = hnd
-            if hnd != nil {
-                var lw: UInt32 = 1280
-                var lh: UInt32 = 720
-                sena_ios_logical_size(hnd, &lw, &lh)
-                self.logicalSize = (max(1, lw), max(1, lh))
-                self.recomputeViewport(wPx: wPx, hPx: hPx, scale: scale, reason: "create")
-                sena_ios_resize_viewport(hnd, wPx, hPx, self.viewportPx.0, self.viewportPx.1, self.viewportPx.2, self.viewportPx.3)
-                let userData = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
-                sena_ios_set_native_messagebox_callback(hnd, sena_ios_messagebox_callback, userData)
+            nls.withCString { nlsC in
+                let hnd = sena_ios_create(viewPtr, wPx, hPx, scale, gameC, nlsC)
+                self.handle = hnd
+                if hnd != nil {
+                    var lw: UInt32 = 1280
+                    var lh: UInt32 = 720
+                    sena_ios_logical_size(hnd, &lw, &lh)
+                    self.logicalSize = (max(1, lw), max(1, lh))
+                    self.recomputeViewport(wPx: wPx, hPx: hPx, scale: scale, reason: "create")
+                    sena_ios_resize_viewport(hnd, wPx, hPx, self.viewportPx.0, self.viewportPx.1, self.viewportPx.2, self.viewportPx.3)
+                    let userData = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+                    sena_ios_set_native_messagebox_callback(hnd, sena_ios_messagebox_callback, userData)
+                }
+                self.lastDrawableSizePx = (wPx, hPx)
+                self.lastScale = scale
             }
-            self.lastDrawableSizePx = (wPx, hPx)
-            self.lastScale = scale
         }
 
         if handle == nil {
@@ -448,10 +453,11 @@ final class SenaPlayerViewController: UIViewController {
 
 struct SenaPlayerContainer: UIViewControllerRepresentable {
     let gameRoot: String
+    let nls: String
     let onExit: () -> Void
 
     func makeUIViewController(context: Context) -> SenaPlayerViewController {
-        SenaPlayerViewController(gameRoot: gameRoot, onExit: onExit)
+        SenaPlayerViewController(gameRoot: gameRoot, nls: nls, onExit: onExit)
     }
 
     func updateUIViewController(_ uiViewController: SenaPlayerViewController, context: Context) {
@@ -466,6 +472,7 @@ struct SenaPlayerScreen: View {
     var body: some View {
         SenaPlayerContainer(
             gameRoot: game.rootPath,
+            nls: game.nls,
             onExit: {
                 DispatchQueue.main.async {
                     library.activeGame = nil

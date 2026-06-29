@@ -39,7 +39,8 @@ body {
 }
 
 button,
-label.file-button {
+label.file-button,
+select {
   font: inherit;
   appearance: none;
   border: 0;
@@ -51,6 +52,23 @@ label.file-button {
   font-weight: 600;
   line-height: 1.2;
   user-select: none;
+}
+
+select {
+  min-height: 34px;
+  padding-right: 28px;
+  background:
+    linear-gradient(45deg, transparent 50%, currentColor 50%) calc(100% - 15px) 50% / 5px 5px no-repeat,
+    linear-gradient(135deg, currentColor 50%, transparent 50%) calc(100% - 10px) 50% / 5px 5px no-repeat,
+    var(--card-bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+
+.field-label {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 button.secondary,
@@ -240,6 +258,13 @@ button:disabled {
 }
 
 .tile-actions .grow { flex: 1; }
+
+.tile-nls {
+  width: 94px;
+  min-height: 32px;
+  font-size: 12px;
+  padding-block: 6px;
+}
 
 #player-screen {
   display: none;

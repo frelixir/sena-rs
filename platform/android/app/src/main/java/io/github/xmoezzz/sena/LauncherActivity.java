@@ -7,6 +7,8 @@ import android.os.Bundle;
 import android.os.Environment;
 import android.provider.Settings;
 import android.widget.Button;
+import android.widget.ArrayAdapter;
+import android.widget.Spinner;
 import android.widget.Toast;
 
 import androidx.activity.result.ActivityResultLauncher;
@@ -30,6 +32,7 @@ public final class LauncherActivity extends AppCompatActivity implements GameAda
 
     private GameLibrary library;
     private GameAdapter adapter;
+    private Spinner nlsSpinner;
 
     private final ActivityResultLauncher<Uri> openTreeLauncher =
             registerForActivityResult(new ActivityResultContracts.OpenDocumentTree(), this::onImportTreeSelected);
@@ -43,12 +46,18 @@ public final class LauncherActivity extends AppCompatActivity implements GameAda
         library = new GameLibrary(this);
 
         RecyclerView rv = findViewById(R.id.game_grid);
-        rv.setLayoutManager(new GridLayoutManager(this, 3));
+        rv.setLayoutManager(new GridLayoutManager(this, computeColumnCount()));
         adapter = new GameAdapter(this);
         rv.setAdapter(adapter);
 
         Button importBtn = findViewById(R.id.btn_import);
         importBtn.setOnClickListener(v -> startImportFlow());
+
+        nlsSpinner = findViewById(R.id.spinner_nls);
+        ArrayAdapter<String> nlsAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, NlsOption.labels());
+        nlsAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        nlsSpinner.setAdapter(nlsAdapter);
+        nlsSpinner.setSelection(0);
 
         refresh();
     }
@@ -56,6 +65,13 @@ public final class LauncherActivity extends AppCompatActivity implements GameAda
     private void refresh() {
         List<GameEntry> entries = library.load();
         adapter.setItems(entries);
+    }
+
+    private int computeColumnCount() {
+        float density = getResources().getDisplayMetrics().density;
+        int widthPx = getResources().getDisplayMetrics().widthPixels;
+        int minTilePx = Math.max(1, (int) (170f * density));
+        return Math.max(1, Math.min(4, widthPx / minTilePx));
     }
 
     private void startImportFlow() {
@@ -110,7 +126,7 @@ public final class LauncherActivity extends AppCompatActivity implements GameAda
 
         new Thread(() -> {
             try {
-                GameLibrary.ImportedGameDraft draft = library.importFromTreeUri(treeUri);
+                GameLibrary.ImportedGameDraft draft = library.importFromTreeUri(treeUri, selectedNlsValue());
                 runOnUiThread(() -> addImportedGame(draft));
             } catch (Throwable t) {
                 library.cleanupPartialImport();
@@ -135,7 +151,7 @@ public final class LauncherActivity extends AppCompatActivity implements GameAda
     public void onGameClicked(GameEntry e) {
         try {
             // Write launch config that native code can read on startup.
-            LaunchConfig.write(this, e.rootPath);
+            LaunchConfig.write(this, e.rootPath, e.nls);
 
             Intent it = new Intent(this, SenaGameActivity.class);
             startActivity(it);
@@ -150,10 +166,26 @@ public final class LauncherActivity extends AppCompatActivity implements GameAda
 
         new AlertDialog.Builder(this)
                 .setTitle(e.title)
-                .setItems(new String[] { "Remove" }, (d, which) -> {
-                    Toast.makeText(this, "Use the launcher list controls to remove games.", Toast.LENGTH_SHORT).show();
+                .setItems(new String[] { "Use ShiftJIS", "Use GBK", "Use UTF-8", "Remove" }, (d, which) -> {
+                    try {
+                        if (which >= 0 && which < 3) {
+                            library.updateNls(e, NlsOption.values()[which].value);
+                            refresh();
+                        } else {
+                            Toast.makeText(this, "Use the launcher list controls to remove games.", Toast.LENGTH_SHORT).show();
+                        }
+                    } catch (Throwable t) {
+                        Toast.makeText(this, "Update failed: " + t.getMessage(), Toast.LENGTH_LONG).show();
+                    }
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    private String selectedNlsValue() {
+        int pos = nlsSpinner != null ? nlsSpinner.getSelectedItemPosition() : 0;
+        NlsOption[] options = NlsOption.values();
+        if (pos < 0 || pos >= options.length) pos = 0;
+        return options[pos].value;
     }
 }
